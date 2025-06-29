@@ -1,2 +1,0 @@
-uvicorn backend.main:app --reload
-C:\Users\Administrator\Desktop\tradebot-pro\frontend>npm start
