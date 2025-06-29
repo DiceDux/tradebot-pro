@@ -30,7 +30,7 @@ def backtest(symbol):
         signal, analysis = "Hold", None
         try:
             y_pred = model.predict(features)[0]
-            signal = ["Sell", "Hold", "Buy"][int(y_pred)]
+            signal = ["Sell", "Hold", "Buy"][int(np.array(y_pred).item())]
         except Exception:
             signal = "Hold"
             print(f"{symbol} | i={i} | signal={signal}")
