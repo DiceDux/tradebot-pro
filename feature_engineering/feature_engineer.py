@@ -140,3 +140,4 @@ def build_features(candles_df, news_df, symbol):
     features_df = pd.DataFrame([features])
     features_df = features_df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
     return features_df
+
