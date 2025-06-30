@@ -40,6 +40,14 @@ def backtest(symbol):
         features = build_features(candle_slice, news_slice, symbol)
         signal, confidence = "Hold", 0.0
 
+        # تشخیص فیچرهای فاندامنتال و تکنیکال (بر اساس نام ستون‌ها)
+        fund_keys = [k for k in features.columns if 'news' in k]
+        tech_keys = [k for k in features.columns if 'news' not in k]
+        fund_score = abs(features[fund_keys]).sum(axis=1).values[0] if fund_keys else 0
+        tech_score = abs(features[tech_keys]).sum(axis=1).values[0] if tech_keys else 0
+
+        print(f"{symbol} | {i} | signal={signal} | conf={confidence*100:.1f}% | fund={fund_score:.2f} | tech={tech_score:.2f}")
+
         try:
             proba = model.predict_proba(features)[0]
             pred_idx = int(np.argmax(proba))
