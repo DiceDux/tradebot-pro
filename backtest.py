@@ -19,7 +19,7 @@ def backtest(symbol):
 
     if candles is None or candles.empty or len(candles) < 120:
         print(f"{symbol}: Not enough data for backtest.")
-        return
+        return None
 
     position = None
     entry_price = 0
@@ -156,13 +156,33 @@ def backtest(symbol):
 
     winrate = wins / n_trades if n_trades > 0 else 0
     total_return = (balance / 10000 - 1) * 100
-    print(f"Backtest {symbol}: Trades: {n_trades} | Winrate: {winrate:.2%} | Total Return: {total_return:.2f}%")
+    print(f"\nBacktest {symbol}:")
+    print(f"  سرمایه اولیه: 10000")
+    print(f"  سرمایه نهایی: {balance:.2f}")
+    print(f"  سود/ضرر درصدی: {total_return:.2f}%")
+    print(f"  تعداد معاملات: {n_trades} | درصد برد: {winrate*100:.2f}%\n")
 
     # ذخیره نتایج سری سرمایه
     pd.Series(balance_series).to_csv(f"backtest_{symbol}_balance.csv", index=False)
     # ذخیره معاملات پله‌ای
     pd.DataFrame(trades).to_csv(f"backtest_{symbol}_trades.csv", index=False)
+    return balance, total_return
 
 if __name__ == "__main__":
+    total_init = 0
+    total_final = 0
+    results = []
     for symbol in SYMBOLS:
-        backtest(symbol)
+        result = backtest(symbol)
+        if result:
+            final_balance, total_return = result
+            total_init += 10000
+            total_final += final_balance
+            results.append((symbol, final_balance, total_return))
+    print("\n----- خلاصه کل پورتفوی -----")
+    print(f"سرمایه اولیه کل: {total_init}")
+    print(f"سرمایه نهایی کل: {total_final:.2f}")
+    print(f"سود/ضرر کل: {((total_final/total_init)-1)*100:.2f}%")
+    print("جزئیات هر ارز:")
+    for symbol, final_balance, total_return in results:
+        print(f"  {symbol}: سرمایه نهایی = {final_balance:.2f} | سود/ضرر = {total_return:.2f}%")
