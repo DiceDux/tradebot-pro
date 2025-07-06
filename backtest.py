@@ -42,8 +42,11 @@ def backtest(symbol):
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
-
-        # تشخیص فیچرهای فاندامنتال و تکنیکال (بر اساس نام ستون‌ها)
+        
+        # مقداردهی اولیه قبل از هر استفاده:
+        signal, confidence = "Hold", 0.0
+        
+        # ... ادامه کد (از جمله پرینت)
         fund_keys = [k for k in features.columns if 'news' in k]
         tech_keys = [k for k in features.columns if 'news' not in k]
         fund_score = abs(features[fund_keys]).sum(axis=1).values[0] if fund_keys else 0
