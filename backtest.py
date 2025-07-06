@@ -39,9 +39,6 @@ def backtest(symbol):
 
     for i in range(100, len(candles)-1):
         candle_slice = candles.iloc[i-99:i+1]
-        news_slice = news[news['published_at'] <= candles.iloc[i]['timestamp']]
-        features = build_features(candle_slice, news_slice, symbol)
-        signal, confidence = "Hold", 0.0
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
