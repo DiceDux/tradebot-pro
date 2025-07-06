@@ -39,7 +39,7 @@ def main():
             features = build_features(candle_slice, news_slice, symbol)
             # خلاصه فاندامنتال
             fund_keys = [k for k in features.columns if 'news' in k]
-            fund_score = abs(features[fund_keys]).sum() if fund_keys else 0
+            fund_score = abs(features[fund_keys]).sum().sum() if fund_keys else 0
             if i % 300 == 0:
                 print(f"[{symbol}][{i}] fund_score={fund_score:.2f}")
             all_features.append(features.iloc[0])
