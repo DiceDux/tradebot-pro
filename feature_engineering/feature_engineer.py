@@ -159,7 +159,7 @@ def build_news_features(news_df, now_ts):
     ranges = {'1h':3600, '6h':21600, '24h':86400}
     news_df = news_df.copy()
     news_df['published_at'] = pd.to_datetime(news_df['published_at'])
-    news_df['ts'] = news_df['published_at'].astype(int) // 10**9
+    news_df['ts'] = news_df['published_at'].astype('int64') // 10**9
     for rng, seconds in ranges.items():
         recent = news_df[news_df['ts'] >= now_ts-seconds]
         result[f'news_count_{rng}'] = len(recent)
