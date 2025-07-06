@@ -28,9 +28,14 @@ def main():
         candles = make_label(candles)
         print("Label distribution for", symbol)
         print(candles['label'].value_counts())
+
+        if not news.empty:
+            news['published_at'] = pd.to_datetime(news['published_at'])
+
         for i in range(len(candles)-12):
-            candle_slice = candles.iloc[max(0, i-99):i+1]  # 100 کندل تا لحظه i
-            news_slice = news[news['published_at'] <= candles.iloc[i]['timestamp']]
+            candle_slice = candles.iloc[max(0, i-99):i+1]
+            candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
+            news_slice = news[news['published_at'] <= candle_time]
             features = build_features(candle_slice, news_slice, symbol)
             all_features.append(features.iloc[0])
             all_labels.append(candles.iloc[i]['label'])
