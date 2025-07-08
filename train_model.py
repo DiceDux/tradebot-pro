@@ -1,10 +1,10 @@
 import pandas as pd
+import numpy as np
 from utils.config import SYMBOLS
 from data.candle_manager import get_latest_candles
 from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
 from model.catboost_model import train_model
-import numpy as np
 
 def make_label(candles, threshold=0.015):
     labels = []
@@ -33,8 +33,7 @@ for symbol in SYMBOLS:
     if candles is None or candles.empty:
         continue
     candles = make_label(candles)
-    print("Label distribution for", symbol)
-    print(candles['label'].value_counts())
+    print(f"Label distribution for {symbol}\n{candles['label'].value_counts()}")
 
     if not news.empty:
         news['published_at'] = pd.to_datetime(news['published_at'])
@@ -44,22 +43,39 @@ for symbol in SYMBOLS:
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
-        # جمع همه فیچرها (ستون‌ها را جمع کن)
-        all_cols.update(features.columns)
-        all_features.append(features)
+
+        # تبدیل همه فیچرها به float عددی (نه Series/DataFrame)
+        features_clean = {}
+        for col in features.columns:
+            val = features[col].values[0] if hasattr(features[col], "values") else features[col]
+            if isinstance(val, (pd.Series, np.ndarray)):
+                val = float(val[0]) if len(val) > 0 else 0.0
+            try:
+                val = float(val)
+            except Exception:
+                val = 0.0
+            features_clean[col] = val
+
+        all_cols.update(features_clean.keys())
+        all_features.append(features_clean)
         all_labels.append(candles.iloc[i]['label'])
 
-# لیست کامل ستون‌ها برای همه فیچرها
-use_cols = sorted(list(all_cols))
+        # لاگ حرفه‌ای برای هر 250 تایم‌استمپ
+        if i % 250 == 0 or i == len(candles) - 1:
+            techs = {k: v for k, v in features_clean.items() if not k.startswith("news")}
+            funds = {k: v for k, v in features_clean.items() if k.startswith("news")}
+            print(f"[{symbol}][{i}] TECH: " + " | ".join([f"{k}={v:.2f}" for k, v in list(techs.items())[:4]]) +
+                  " | ... | FUND: " + " | ".join([f"{k}={v:.2f}" for k, v in list(funds.items())[:4]]) + " | ...")
 
-# همه فیچرها را به DataFrame تبدیل کن و ستون‌های ناقص را با 0 پر کن
-X = pd.DataFrame([{col: f[col] if col in f else 0 for col in use_cols} for f in all_features])
+# تمام ستون‌های دیده‌شده در دیتافریم نهایی
+use_cols = sorted(list(all_cols))
+X = pd.DataFrame([{col: f.get(col, 0.0) for col in use_cols} for f in all_features])
 y = np.array(all_labels)
+
 print(f"Training samples: {len(X)}")
 print("All feature columns:", X.columns.tolist())
 print("Sample row:", X.iloc[0].to_dict())
 
-# (نمایش خلاصه از فیچرهای تکنیکال و فاندامنتال)
 tech_cols = [c for c in X.columns if not c.startswith("news")]
 fund_cols = [c for c in X.columns if c.startswith("news")]
 print(f"Number of technical features: {len(tech_cols)}")
