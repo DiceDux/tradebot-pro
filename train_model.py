@@ -7,7 +7,6 @@ from model.catboost_model import train_model
 import numpy as np
 
 def make_label(candles, threshold=0.015):
-    # 0: sell, 1: hold, 2: buy
     labels = []
     for i in range(len(candles) - 12):
         future = candles.iloc[i+1:i+13]
@@ -26,7 +25,7 @@ def make_label(candles, threshold=0.015):
 
 all_features = []
 all_labels = []
-use_cols = None
+all_cols = set()
 
 for symbol in SYMBOLS:
     candles = get_latest_candles(symbol, limit=3000)
@@ -45,38 +44,25 @@ for symbol in SYMBOLS:
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
-
-        # فقط فیچرهای بازه‌ای را به مدل بده:
-        cur_use_cols = [c for c in features.columns if not (
-            c in ['news_count', 'news_sentiment_mean', 'news_sentiment_std', 'news_pos_count', 'news_neg_count', 'news_latest_sentiment', 'news_content_len']
-        )]
-        if use_cols is None:
-            use_cols = cur_use_cols
-        all_features.append(features[cur_use_cols].values[0])
+        # جمع همه فیچرها (ستون‌ها را جمع کن)
+        all_cols.update(features.columns)
+        all_features.append(features)
         all_labels.append(candles.iloc[i]['label'])
 
-X = pd.DataFrame(all_features, columns=use_cols)
+# لیست کامل ستون‌ها برای همه فیچرها
+use_cols = sorted(list(all_cols))
+
+# همه فیچرها را به DataFrame تبدیل کن و ستون‌های ناقص را با 0 پر کن
+X = pd.DataFrame([{col: f[col] if col in f else 0 for col in use_cols} for f in all_features])
 y = np.array(all_labels)
 print(f"Training samples: {len(X)}")
+print("All feature columns:", X.columns.tolist())
+print("Sample row:", X.iloc[0].to_dict())
+
+# (نمایش خلاصه از فیچرهای تکنیکال و فاندامنتال)
+tech_cols = [c for c in X.columns if not c.startswith("news")]
+fund_cols = [c for c in X.columns if c.startswith("news")]
+print(f"Number of technical features: {len(tech_cols)}")
+print(f"Number of fundamental features: {len(fund_cols)}")
+
 model = train_model(X, y)
-print("Model trained and saved to model/catboost_tradebot_pro.pkl")
-
-# نمایش feature importance
-feature_names = X.columns if hasattr(X, 'columns') else [f"f{i}" for i in range(X.shape[1])]
-importances = model.get_feature_importance()
-sorted_idx = np.argsort(importances)[::-1]
-
-print("\nTop 15 Feature Importances:")
-for idx in sorted_idx[:15]:
-    print(f"{feature_names[idx]} : {importances[idx]:.4f}")
-
-try:
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10,6))
-    plt.bar([feature_names[i] for i in sorted_idx[:15]], importances[sorted_idx[:15]])
-    plt.xticks(rotation=45)
-    plt.title("Top 15 Feature Importances")
-    plt.tight_layout()
-    plt.savefig("feature_importance.png")
-except Exception as e:
-    print("Plotting feature importances failed:", e)
