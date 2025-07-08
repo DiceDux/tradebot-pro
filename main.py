@@ -8,20 +8,19 @@ from data.db_manager import save_analysis
 
 def main():
     print("TradeBot Pro is running...")
-    model = load_or_train_model()  # مدل را آموزش بده یا لود کن
+    model, feature_names = load_or_train_model()
     while True:
         for symbol in SYMBOLS:
-            # 1. دریافت کندل و خبر
             candles = get_latest_candles(symbol)
             news = get_latest_news(symbol)
-            # 2. ساخت فیچرهای کامل (تکنیکال + فاندامنتال)
             features = build_features(candles, news, symbol)
-            # 3. پیش‌بینی سیگنال و تحلیل
-            signal, analysis = predict_signals(model, features)
-            # 4. ذخیره تحلیل (برای پنل UI)
+            features_df = features.copy()
+            if isinstance(features_df, dict):
+                import pandas as pd
+                features_df = pd.DataFrame([features_df])
+            signal, analysis = predict_signals(model, feature_names, features_df)
             save_analysis(symbol, analysis)
             print(f"{symbol}: {signal} | تحلیل ذخیره شد")
-        # اجرای تحلیل بعد از هر ۵ دقیقه
         time.sleep(PREDICTION_INTERVAL)
 
 if __name__ == "__main__":

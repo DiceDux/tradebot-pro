@@ -20,13 +20,14 @@ def make_label(candles, threshold=0.015):
             labels.append(0)  # sell
         else:
             labels.append(1)  # hold
-    # برای سازگاری طول
     candles = candles.iloc[:-12].copy()
     candles['label'] = labels
     return candles
 
 all_features = []
 all_labels = []
+use_cols = None
+
 for symbol in SYMBOLS:
     candles = get_latest_candles(symbol, limit=3000)
     news = get_latest_news(symbol, hours=365*24)
@@ -45,25 +46,18 @@ for symbol in SYMBOLS:
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
 
-        # فقط فیچرهای بازه‌ای فاندامنتال برای پرینت خلاصه
-        news_count_24h = features['news_count_24h'].values[0] if 'news_count_24h' in features else 0
-        news_sent_mean_24h = features['news_sentiment_mean_24h'].values[0] if 'news_sentiment_mean_24h' in features else 0
-        news_shock_24h = features['news_shock_24h'].values[0] if 'news_shock_24h' in features else 0
-
-        if i % 300 == 0:
-            print(f"[{symbol}][{i}] news_count_24h={news_count_24h:.0f} | news_sent_mean_24h={news_sent_mean_24h:.2f} | news_shock_24h={news_shock_24h:.2f}")
-
         # فقط فیچرهای بازه‌ای را به مدل بده:
-        use_cols = [c for c in features.columns if not (
+        cur_use_cols = [c for c in features.columns if not (
             c in ['news_count', 'news_sentiment_mean', 'news_sentiment_std', 'news_pos_count', 'news_neg_count', 'news_latest_sentiment', 'news_content_len']
         )]
-        all_features.append(features[use_cols].values[0])
+        if use_cols is None:
+            use_cols = cur_use_cols
+        all_features.append(features[cur_use_cols].values[0])
         all_labels.append(candles.iloc[i]['label'])
 
-X = pd.DataFrame(all_features)
+X = pd.DataFrame(all_features, columns=use_cols)
 y = np.array(all_labels)
-print("Training samples:", len(X))
-
+print(f"Training samples: {len(X)}")
 model = train_model(X, y)
 print("Model trained and saved to model/catboost_tradebot_pro.pkl")
 
