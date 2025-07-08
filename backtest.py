@@ -37,6 +37,16 @@ def backtest(symbol):
     if not news.empty:
         news['published_at'] = pd.to_datetime(news['published_at'])
 
+    fund_features = [
+        'news_count_24h',
+        'news_sentiment_mean_24h',
+        'news_sentiment_max_24h',
+        'news_sentiment_min_24h',
+        'news_shock_24h',
+        'news_pos_ratio_24h',
+        'news_neg_ratio_24h'
+    ]
+
     for i in range(100, len(candles)-1):
         candle_slice = candles.iloc[i-99:i+1]
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
@@ -47,16 +57,19 @@ def backtest(symbol):
         signal, confidence = "Hold", 0.0
 
         # فقط فیچرهای بازه‌ای فاندامنتال را لحاظ کن
-        fund_keys = [k for k in features.columns if 'news' in k and any(w in k for w in ['_24h','_6h','_1h'])]
-        tech_keys = [k for k in features.columns if 'news' not in k]
+        fund_keys = [k for k in features.columns if k in fund_features]
+        tech_keys = [k for k in features.columns if k not in fund_features and 'news' not in k]
         fund_score = abs(features[fund_keys]).sum(axis=1).values[0] if fund_keys else 0
         tech_score = abs(features[tech_keys]).sum(axis=1).values[0] if tech_keys else 0
 
         # خروجی خلاصه اخبار 24 ساعته اخیر
-        news_count_24h = features['news_count_24h'].values[0] if 'news_count_24h' in features else 0
-        news_sent_mean_24h = features['news_sentiment_mean_24h'].values[0] if 'news_sentiment_mean_24h' in features else 0
-
-        print(f"{symbol} | {i} | signal={signal} | conf={confidence*100:.1f}% | news_count_24h={news_count_24h:.0f} | news_sent_24h={news_sent_mean_24h:.2f} | fund_score={fund_score:.2f} | tech={tech_score:.2f}")
+        vals = {f: features[f].values[0] if f in features else 0 for f in fund_features}
+        if i % 200 == 0:
+            print(
+                f"{symbol} | {i} | " +
+                " | ".join([f"{k}={v:.2f}" for k, v in vals.items()]) +
+                f" | signal={signal} | conf={confidence*100:.1f}% | fund_score={fund_score:.2f} | tech={tech_score:.2f}"
+            )
 
         try:
             proba = model.predict_proba(features)[0]
