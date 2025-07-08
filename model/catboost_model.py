@@ -5,6 +5,14 @@ import numpy as np
 
 MODEL_PATH = "model/catboost_tradebot_pro.pkl"
 
+def train_model(X, y):
+    from catboost import CatBoostClassifier
+    import joblib
+    model = CatBoostClassifier(iterations=300, verbose=0)
+    model.fit(X, y)
+    joblib.dump(model, "model/catboost_tradebot_pro.pkl")
+    return model
+
 def load_or_train_model():
     if os.path.exists(MODEL_PATH):
         model = joblib.load(MODEL_PATH)
