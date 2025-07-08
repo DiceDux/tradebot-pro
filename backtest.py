@@ -42,17 +42,21 @@ def backtest(symbol):
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
         features = build_features(candle_slice, news_slice, symbol)
-        
+
         # مقداردهی اولیه قبل از هر استفاده:
         signal, confidence = "Hold", 0.0
-        
-        # ... ادامه کد (از جمله پرینت)
-        fund_keys = [k for k in features.columns if 'news' in k]
+
+        # فقط فیچرهای بازه‌ای فاندامنتال را لحاظ کن
+        fund_keys = [k for k in features.columns if 'news' in k and any(w in k for w in ['_24h','_6h','_1h'])]
         tech_keys = [k for k in features.columns if 'news' not in k]
         fund_score = abs(features[fund_keys]).sum(axis=1).values[0] if fund_keys else 0
         tech_score = abs(features[tech_keys]).sum(axis=1).values[0] if tech_keys else 0
 
-        print(f"{symbol} | {i} | signal={signal} | conf={confidence*100:.1f}% | fund={fund_score:.2f} | tech={tech_score:.2f}")
+        # خروجی خلاصه اخبار 24 ساعته اخیر
+        news_count_24h = features['news_count_24h'].values[0] if 'news_count_24h' in features else 0
+        news_sent_mean_24h = features['news_sentiment_mean_24h'].values[0] if 'news_sentiment_mean_24h' in features else 0
+
+        print(f"{symbol} | {i} | signal={signal} | conf={confidence*100:.1f}% | news_count_24h={news_count_24h:.0f} | news_sent_24h={news_sent_mean_24h:.2f} | fund_score={fund_score:.2f} | tech={tech_score:.2f}")
 
         try:
             proba = model.predict_proba(features)[0]
