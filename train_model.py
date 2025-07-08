@@ -54,7 +54,6 @@ for symbol in SYMBOLS:
             print(f"[{symbol}][{i}] news_count_24h={news_count_24h:.0f} | news_sent_mean_24h={news_sent_mean_24h:.2f} | news_shock_24h={news_shock_24h:.2f}")
 
         # فقط فیچرهای بازه‌ای را به مدل بده:
-        # (اگر خواستی فیچرهای تکنیکال را هم فیلتر کنی، اینجا اضافه کن)
         use_cols = [c for c in features.columns if not (
             c in ['news_count', 'news_sentiment_mean', 'news_sentiment_std', 'news_pos_count', 'news_neg_count', 'news_latest_sentiment', 'news_content_len']
         )]
@@ -67,3 +66,23 @@ print("Training samples:", len(X))
 
 model = train_model(X, y)
 print("Model trained and saved to model/catboost_tradebot_pro.pkl")
+
+# نمایش feature importance
+feature_names = X.columns if hasattr(X, 'columns') else [f"f{i}" for i in range(X.shape[1])]
+importances = model.get_feature_importance()
+sorted_idx = np.argsort(importances)[::-1]
+
+print("\nTop 15 Feature Importances:")
+for idx in sorted_idx[:15]:
+    print(f"{feature_names[idx]} : {importances[idx]:.4f}")
+
+try:
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10,6))
+    plt.bar([feature_names[i] for i in sorted_idx[:15]], importances[sorted_idx[:15]])
+    plt.xticks(rotation=45)
+    plt.title("Top 15 Feature Importances")
+    plt.tight_layout()
+    plt.savefig("feature_importance.png")
+except Exception as e:
+    print("Plotting feature importances failed:", e)
