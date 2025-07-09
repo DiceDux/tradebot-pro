@@ -20,14 +20,19 @@ def calculate_vwap(df):
 def build_features(candles_df, news_df, symbol):
     features = {}
 
+    # --- رفع مشکل ts ---
+    if news_df is not None and not news_df.empty:
+        if 'ts' not in news_df.columns:
+            if 'published_at' in news_df.columns:
+                news_df = news_df.copy()
+                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+
     # =========== تکنیکال ===========
     if candles_df is not None and not candles_df.empty:
         close = candles_df['close']
         high = candles_df['high']
         low = candles_df['low']
         volume = candles_df['volume']
-
-        # Moving Averages
         features['ema5'] = close.ewm(span=5).mean().values[-1]
         features['ema10'] = close.ewm(span=10).mean().values[-1]
         features['ema20'] = close.ewm(span=20).mean().values[-1]
@@ -37,23 +42,17 @@ def build_features(candles_df, news_df, symbol):
         features['sma20'] = close.rolling(window=20).mean().values[-1]
         features['sma50'] = close.rolling(window=50).mean().values[-1]
         features['tema20'] = 3*close.ewm(span=20).mean().values[-1] - 3*close.ewm(span=20).mean().ewm(span=20).mean().values[-1] + close.ewm(span=20).mean().ewm(span=20).mean().ewm(span=20).mean().values[-1]
-
-        # RSI
         delta = close.diff()
         gain = delta.where(delta > 0, 0).rolling(14).mean()
         loss = -delta.where(delta < 0, 0).rolling(14).mean()
         rs = gain / (loss.replace(0, np.nan))
         features['rsi14'] = 100 - (100 / (1 + rs.values[-1])) if rs.values[-1] is not np.nan else 50
-
-        # ATR
         tr = pd.concat([
             (high - low),
             (high - close.shift()).abs(),
             (low - close.shift()).abs()
         ], axis=1).max(axis=1)
         features['atr14'] = tr.rolling(14).mean().values[-1]
-
-        # MACD
         ema12 = close.ewm(span=12).mean()
         ema26 = close.ewm(span=26).mean()
         macd = ema12 - ema26
@@ -61,54 +60,33 @@ def build_features(candles_df, news_df, symbol):
         features['macd'] = macd.values[-1]
         features['macd_signal'] = signal.values[-1]
         features['macd_hist'] = (macd - signal).values[-1]
-
-        # Bollinger Bands
         bb_mid = close.rolling(window=20).mean()
         bb_std = close.rolling(window=20).std()
         features['bb_upper'] = (bb_mid + 2 * bb_std).values[-1]
         features['bb_lower'] = (bb_mid - 2 * bb_std).values[-1]
         features['bb_width'] = (features['bb_upper'] - features['bb_lower'])
-
-        # OBV
         features['obv'] = calculate_obv(candles_df)
-
-        # VWAP
         features['vwap'] = calculate_vwap(candles_df)
-
-        # Stochastic Oscillator
         low14 = low.rolling(14).min()
         high14 = high.rolling(14).max()
         features['stoch_k'] = 100 * (close.values[-1] - low14.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8)
         features['stoch_d'] = pd.Series([features['stoch_k']]).rolling(3).mean().values[-1]
-
-        # CCI
         tp = (high + low + close) / 3
         cci = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
         features['cci'] = cci.values[-1]
-
-        # Williams %R
         willr = (high14.values[-1] - close.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8) * -100
         features['willr'] = willr
-
-        # Momentum
         features['roc'] = close.pct_change(periods=10).values[-1]
-
-        # PSAR (ساده)
-        features['psar'] = close.values[-1]  # می‌شود دقیق‌تر کرد
-
-        # سایر ویژگی‌های کندل
+        features['psar'] = close.values[-1]
         features['candle_change'] = close.pct_change().values[-1]
         features['candle_range'] = (high - low).values[-1]
         features['volume_mean'] = volume.rolling(20).mean().values[-1]
         features['volume_spike'] = float(volume.values[-1] > features['volume_mean'] * 1.5)
-
-        # قیمت و حجم فعلی
         features['close'] = close.values[-1]
         features['open'] = candles_df['open'].values[-1]
         features['high'] = high.values[-1]
         features['low'] = low.values[-1]
         features['volume'] = volume.values[-1]
-
     else:
         for name in [
             'ema5','ema10','ema20','ema50','ema100','ema200','sma20','sma50','tema20',
@@ -118,35 +96,17 @@ def build_features(candles_df, news_df, symbol):
         ]:
             features[name] = 0.0
 
-    # =========== فاندامنتال/اخبار ===========
     now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(pd.Timestamp.now().timestamp())
-
     ranges = {
-        '1h': 1*60*60,
-        '6h': 6*60*60,
-        '12h': 12*60*60,
-        '24h': 24*60*60,
-        '36h': 36*60*60,
-        '48h': 48*60*60,
-        '50h': 50*60*60,
-        '62h': 62*60*60,
+        '1h': 1*60*60, '6h': 6*60*60, '12h': 12*60*60, '24h': 24*60*60,
+        '36h': 36*60*60, '48h': 48*60*60, '50h': 50*60*60, '62h': 62*60*60,
     }
-    weights = {
-        '1h': 1.0,
-        '6h': 0.8,
-        '12h': 0.7,
-        '24h': 0.6,
-        '36h': 0.5,
-        '48h': 0.4,
-        '50h': 0.3,
-        '62h': 0.2,
-    }
+    weights = {'1h':1.0,'6h':0.8,'12h':0.7,'24h':0.6,'36h':0.5,'48h':0.4,'50h':0.3,'62h':0.2}
     weighted_score = 0.0
     total_weight = 0.0
     result = {}
 
     if news_df is not None and not news_df.empty:
-        # فیچرهای ساده قبلی
         features['news_count'] = len(news_df)
         features['news_sentiment_mean'] = news_df['sentiment_score'].astype(float).mean() if 'sentiment_score' in news_df else 0.0
         features['news_sentiment_std'] = news_df['sentiment_score'].astype(float).std() if 'sentiment_score' in news_df else 0.0
@@ -155,7 +115,6 @@ def build_features(candles_df, news_df, symbol):
         features['news_latest_sentiment'] = news_df['sentiment_score'].astype(float).values[0] if 'sentiment_score' in news_df else 0.0
         features['news_content_len'] = news_df['content'].str.len().mean() if 'content' in news_df else 0.0
 
-        # فیچرهای بازه‌ای متنوع
         for rng, seconds in ranges.items():
             recent = news_df[news_df['ts'] >= now_ts-seconds]
             result[f'news_count_{rng}'] = len(recent)
@@ -166,7 +125,6 @@ def build_features(candles_df, news_df, symbol):
                 result[f'news_sentiment_min_{rng}'] = s.min()
                 result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
                 result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
-                # وزنی
                 weighted_score += s.mean() * weights[rng]
                 total_weight += weights[rng]
             else:
@@ -187,7 +145,6 @@ def build_features(candles_df, news_df, symbol):
                 features[f'news_{v}_{rng}'] = 0.0
         features['news_weighted_score'] = 0.0
 
-    # خروجی نهایی
     features_df = pd.DataFrame([features])
     features_df = features_df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
     return features_df
