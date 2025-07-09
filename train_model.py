@@ -42,6 +42,8 @@ for symbol in SYMBOLS:
         candle_slice = candles.iloc[max(0, i-99):i+1]
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time]
+        if i % 200 == 0:
+            print(f"[{symbol}][{i}] News count in window: {len(news_slice)}")
         features = build_features(candle_slice, news_slice, symbol)
 
         # تبدیل همه فیچرها به float عددی (نه Series/DataFrame)
