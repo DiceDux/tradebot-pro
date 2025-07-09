@@ -7,11 +7,22 @@ from feature_engineering.feature_engineer import build_features
 from model.catboost_model import train_model
 import os
 
-def make_label(candles):
-    # فرض بر این است که این تابع لیبل را می‌سازد (در کد قبلی بود)
-    # اگر تابع کامل‌تر نیاز داشتی همینجا بده
-    labels = np.random.randint(0, 3, size=len(candles))  # دمو
-    candles = candles.iloc[:-12].copy()
+def make_label(candles, threshold=0.03, future_steps=12):
+    closes = candles['close'].values
+    labels = []
+    for i in range(len(closes) - future_steps):
+        future_window = closes[i+1:i+1+future_steps]
+        current = closes[i]
+        max_future = future_window.max()
+        min_future = future_window.min()
+        if (max_future - current) / current > threshold:
+            labels.append(2)  # Buy
+        elif (current - min_future) / current > threshold:
+            labels.append(0)  # Sell
+        else:
+            labels.append(1)  # Hold
+    # آخرین future_steps ردیف لیبل ندارد، حذفشان کن
+    candles = candles.iloc[:-future_steps].copy()
     candles['label'] = labels
     return candles
 
