@@ -12,14 +12,12 @@ def make_label(candles, news_df=None, threshold=0.03, future_steps=12, past_step
     volumes = candles['volume'].values
     labels = []
     for i in range(past_steps, len(closes) - future_steps):
-        # رفتار قیمت آینده و حجم
         future_window = closes[i+1:i+1+future_steps]
         current = closes[i]
         max_future = future_window.max()
         min_future = future_window.min()
         future_vol = volumes[i+1:i+1+future_steps].mean()
         current_vol = volumes[i]
-        # رفتار قیمت گذشته
         past_window = closes[i-past_steps:i]
         past_max = past_window.max()
         past_min = past_window.min()
@@ -27,19 +25,25 @@ def make_label(candles, news_df=None, threshold=0.03, future_steps=12, past_step
         shock = 0
         if news_df is not None and not news_df.empty:
             t0 = candles.iloc[i]['timestamp']
+            if 'ts' not in news_df.columns and 'published_at' in news_df.columns:
+                news_df = news_df.copy()
+                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
             shock_news = news_df[(news_df['ts'] <= t0) & (news_df['ts'] > t0 - 3600*6)]
-            if not shock_news.empty:
+            if not shock_news.empty and 'sentiment_score' in shock_news:
                 shock = shock_news['sentiment_score'].astype(float).abs().mean()
-        # منطق پیشرفته: ترکیب روند، حجم، شوک خبری، رفتار گذشته
+        # منطق پیشرفته: ترکیب روند، حجم، شوک خبری، رفتار گذشته و متوسط احساسات کل اخبار
+        fund_score = 0
+        if news_df is not None and not news_df.empty and 'sentiment_score' in news_df:
+            fund_score = news_df['sentiment_score'].astype(float).mean()
         buy_cond = (
             (max_future - current) / current > threshold and
             current > past_max and
-            (future_vol > current_vol * 1.05 or shock > 0.3)
+            (future_vol > current_vol * 1.05 or shock > 0.2 or fund_score > 0.1)
         )
         sell_cond = (
             (current - min_future) / current > threshold and
             current < past_min and
-            (future_vol > current_vol * 1.05 or shock > 0.3)
+            (future_vol > current_vol * 1.05 or shock > 0.2 or fund_score < -0.1)
         )
         if buy_cond:
             labels.append(2)  # Buy
