@@ -7,22 +7,47 @@ from feature_engineering.feature_engineer import build_features
 from model.catboost_model import train_model
 import os
 
-def make_label(candles, threshold=0.03, future_steps=12):
+def make_label(candles, news_df=None, threshold=0.03, future_steps=12, past_steps=12):
     closes = candles['close'].values
+    volumes = candles['volume'].values
     labels = []
-    for i in range(len(closes) - future_steps):
+    for i in range(past_steps, len(closes) - future_steps):
+        # رفتار قیمت آینده و حجم
         future_window = closes[i+1:i+1+future_steps]
         current = closes[i]
         max_future = future_window.max()
         min_future = future_window.min()
-        if (max_future - current) / current > threshold:
+        future_vol = volumes[i+1:i+1+future_steps].mean()
+        current_vol = volumes[i]
+        # رفتار قیمت گذشته
+        past_window = closes[i-past_steps:i]
+        past_max = past_window.max()
+        past_min = past_window.min()
+        # شوک خبری
+        shock = 0
+        if news_df is not None and not news_df.empty:
+            t0 = candles.iloc[i]['timestamp']
+            shock_news = news_df[(news_df['ts'] <= t0) & (news_df['ts'] > t0 - 3600*6)]
+            if not shock_news.empty:
+                shock = shock_news['sentiment_score'].astype(float).abs().mean()
+        # منطق پیشرفته: ترکیب روند، حجم، شوک خبری، رفتار گذشته
+        buy_cond = (
+            (max_future - current) / current > threshold and
+            current > past_max and
+            (future_vol > current_vol * 1.05 or shock > 0.3)
+        )
+        sell_cond = (
+            (current - min_future) / current > threshold and
+            current < past_min and
+            (future_vol > current_vol * 1.05 or shock > 0.3)
+        )
+        if buy_cond:
             labels.append(2)  # Buy
-        elif (current - min_future) / current > threshold:
+        elif sell_cond:
             labels.append(0)  # Sell
         else:
             labels.append(1)  # Hold
-    # آخرین future_steps ردیف لیبل ندارد، حذفشان کن
-    candles = candles.iloc[:-future_steps].copy()
+    candles = candles.iloc[past_steps:-(future_steps)].copy()
     candles['label'] = labels
     return candles
 
