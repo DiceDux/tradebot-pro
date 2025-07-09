@@ -25,7 +25,7 @@ def build_features(candles_df, news_df, symbol):
         if 'ts' not in news_df.columns:
             if 'published_at' in news_df.columns:
                 news_df = news_df.copy()
-                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                news_df['ts'] = pd.to_datetime(news_df['published_at']).values.astype('int64') // 10**9
 
     # =========== تکنیکال ===========
     if candles_df is not None and not candles_df.empty:
