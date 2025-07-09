@@ -20,7 +20,7 @@ def calculate_vwap(df):
 def build_features(candles_df, news_df, symbol):
     features = {}
 
-    # =========================== تکنیکال ===========================
+    # =========== تکنیکال ===========
     if candles_df is not None and not candles_df.empty:
         close = candles_df['close']
         high = candles_df['high']
@@ -94,13 +94,13 @@ def build_features(candles_df, news_df, symbol):
         features['roc'] = close.pct_change(periods=10).values[-1]
 
         # PSAR (ساده)
-        features['psar'] = close.values[-1]  # جایگزین کن با پیاده‌سازی دقیق‌تر اگر خواستی
+        features['psar'] = close.values[-1]  # می‌شود دقیق‌تر کرد
 
         # سایر ویژگی‌های کندل
         features['candle_change'] = close.pct_change().values[-1]
         features['candle_range'] = (high - low).values[-1]
         features['volume_mean'] = volume.rolling(20).mean().values[-1]
-        features['volume_spike'] = (volume.values[-1] > features['volume_mean'] * 1.5)
+        features['volume_spike'] = float(volume.values[-1] > features['volume_mean'] * 1.5)
 
         # قیمت و حجم فعلی
         features['close'] = close.values[-1]
@@ -110,21 +110,43 @@ def build_features(candles_df, news_df, symbol):
         features['volume'] = volume.values[-1]
 
     else:
-        # مقادیر پیش‌فرض
-        for name in ['ema5','ema10','ema20','ema50','ema100','ema200','sma20','sma50','tema20',
-                     'rsi14','atr14','macd','macd_signal','macd_hist','bb_upper','bb_lower','bb_width',
-                     'obv','vwap','stoch_k','stoch_d','cci','willr','roc','psar','candle_change','candle_range',
-                     'volume_mean','volume_spike','close','open','high','low','volume']:
+        for name in [
+            'ema5','ema10','ema20','ema50','ema100','ema200','sma20','sma50','tema20',
+            'rsi14','atr14','macd','macd_signal','macd_hist','bb_upper','bb_lower','bb_width',
+            'obv','vwap','stoch_k','stoch_d','cci','willr','roc','psar','candle_change','candle_range',
+            'volume_mean','volume_spike','close','open','high','low','volume'
+        ]:
             features[name] = 0.0
 
-    # ========================== فاندامنتال/اخبار ==========================
-    # --- فیچرهای حرفه‌ای اخبار ---
+    # =========== فاندامنتال/اخبار ===========
     now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(pd.Timestamp.now().timestamp())
-    news_feats = build_news_features(news_df, now_ts)
-    features.update(news_feats)
 
-    # فیچرهای ساده قبلی (در صورت نیاز نگه‌دار)
+    ranges = {
+        '1h': 1*60*60,
+        '6h': 6*60*60,
+        '12h': 12*60*60,
+        '24h': 24*60*60,
+        '36h': 36*60*60,
+        '48h': 48*60*60,
+        '50h': 50*60*60,
+        '62h': 62*60*60,
+    }
+    weights = {
+        '1h': 1.0,
+        '6h': 0.8,
+        '12h': 0.7,
+        '24h': 0.6,
+        '36h': 0.5,
+        '48h': 0.4,
+        '50h': 0.3,
+        '62h': 0.2,
+    }
+    weighted_score = 0.0
+    total_weight = 0.0
+    result = {}
+
     if news_df is not None and not news_df.empty:
+        # فیچرهای ساده قبلی
         features['news_count'] = len(news_df)
         features['news_sentiment_mean'] = news_df['sentiment_score'].astype(float).mean() if 'sentiment_score' in news_df else 0.0
         features['news_sentiment_std'] = news_df['sentiment_score'].astype(float).std() if 'sentiment_score' in news_df else 0.0
@@ -132,54 +154,40 @@ def build_features(candles_df, news_df, symbol):
         features['news_neg_count'] = news_df[news_df['sentiment_score'].astype(float) < -0.1].shape[0] if 'sentiment_score' in news_df else 0
         features['news_latest_sentiment'] = news_df['sentiment_score'].astype(float).values[0] if 'sentiment_score' in news_df else 0.0
         features['news_content_len'] = news_df['content'].str.len().mean() if 'content' in news_df else 0.0
+
+        # فیچرهای بازه‌ای متنوع
+        for rng, seconds in ranges.items():
+            recent = news_df[news_df['ts'] >= now_ts-seconds]
+            result[f'news_count_{rng}'] = len(recent)
+            if len(recent) > 0 and 'sentiment_score' in recent:
+                s = recent['sentiment_score'].astype(float)
+                result[f'news_sentiment_mean_{rng}'] = s.mean()
+                result[f'news_sentiment_max_{rng}'] = s.max()
+                result[f'news_sentiment_min_{rng}'] = s.min()
+                result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
+                result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
+                # وزنی
+                weighted_score += s.mean() * weights[rng]
+                total_weight += weights[rng]
+            else:
+                for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
+                    result[f'news_{v}_{rng}'] = 0.0
+        if total_weight > 0:
+            result['news_weighted_score'] = weighted_score / total_weight
+        else:
+            result['news_weighted_score'] = 0.0
+        features.update(result)
     else:
         for name in ['news_count','news_sentiment_mean','news_sentiment_std','news_pos_count',
                      'news_neg_count','news_latest_sentiment','news_content_len']:
             features[name] = 0.0
+        for rng in ranges:
+            features[f'news_count_{rng}'] = 0.0
+            for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
+                features[f'news_{v}_{rng}'] = 0.0
+        features['news_weighted_score'] = 0.0
 
-    # ======= ویژگی‌های ترکیبی/آماری قابل گسترش =======
-    # برای توسعه بعدی: فیچرهای ترکیبی، واگرایی، اخبار کل بازار و غیره
-
-    # ========================== خروجی نهایی ==========================
+    # خروجی نهایی
     features_df = pd.DataFrame([features])
     features_df = features_df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
     return features_df
-
-# ======================== تابع اخبار پیشرفته ========================
-def build_news_features(news_df, now_ts):
-    result = {}
-    if news_df is None or news_df.empty:
-        for k in ['news_count_1h', 'news_count_6h', 'news_count_24h',
-                  'news_sentiment_mean_1h', 'news_sentiment_max_24h', 'news_sentiment_min_24h',
-                  'news_shock_24h', 'news_pos_ratio_24h', 'news_neg_ratio_24h']:
-            result[k] = 0.0
-        return result
-
-    # ساخت فیچر برای بازه‌های زمانی مختلف
-    ranges = {'1h':3600, '6h':21600, '24h':86400}
-    news_df = news_df.copy()
-    news_df['published_at'] = pd.to_datetime(news_df['published_at'])
-    news_df['ts'] = news_df['published_at'].astype('int64') // 10**9
-    for rng, seconds in ranges.items():
-        recent = news_df[news_df['ts'] >= now_ts-seconds]
-        result[f'news_count_{rng}'] = len(recent)
-        if len(recent) > 0 and 'sentiment_score' in recent:
-            s = recent['sentiment_score'].astype(float)
-            result[f'news_sentiment_mean_{rng}'] = s.mean()
-            result[f'news_sentiment_max_{rng}'] = s.max()
-            result[f'news_sentiment_min_{rng}'] = s.min()
-            result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
-            result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
-        else:
-            for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
-                result[f'news_{v}_{rng}'] = 0.0
-
-    # فیچر شوک خبری (تغییر ناگهانی میانگین احساسات نسبت به 24 ساعت قبل)
-    if 'sentiment_score' in news_df:
-        mean24 = news_df[news_df['ts'] >= now_ts-86400]['sentiment_score'].astype(float).mean()
-        mean_prev24 = news_df[(news_df['ts'] < now_ts-86400) & (news_df['ts'] >= now_ts-2*86400)]['sentiment_score'].astype(float).mean() if len(news_df) > 0 else 0
-        result['news_shock_24h'] = mean24 - mean_prev24 if pd.notnull(mean24) and pd.notnull(mean_prev24) else 0.0
-    else:
-        result['news_shock_24h'] = 0.0
-
-    return result
