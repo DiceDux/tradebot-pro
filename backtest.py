@@ -11,8 +11,9 @@ TP_STEPS = [0.03, 0.05, 0.07]   # پله‌های سود (3٪، 5٪، 7٪)
 TP_QTYS = [0.3, 0.3, 0.4]       # نسبت حجم فروش هر پله
 SL_PCT = 0.02                   # حد ضرر 2 درصد
 THRESHOLD = 0.7                 # حداقل اطمینان برای تریگر سیگنال (پیشنهاد: 0.7)
+FEE_RATE = 0.001                # کارمزد صرافی (مثلاً CoinEx، 0.1%)
 
-def backtest(symbol):
+def backtest(symbol, initial_balance=100):
     candles = get_latest_candles(symbol, limit=3000)
     news = get_latest_news(symbol, hours=365*24)
     try:
@@ -44,7 +45,7 @@ def backtest(symbol):
     tp_prices = []
     qty_left = 1.0
     tp_idx = 0
-    balance = 100  # سرمایه اولیه دلاری
+    balance = initial_balance  # سرمایه اولیه دلاری (قابل تنظیم)
     balance_series = []
     returns = []
     n_trades = 0
@@ -90,26 +91,28 @@ def backtest(symbol):
             # حد ضرر
             if price_now <= sl_price:
                 loss = (price_now - entry_price) * qty_left * balance / entry_price
-                balance += loss
-                returns.append(loss)
+                fee = abs(loss) * FEE_RATE  # کارمزد خروج از پوزیشن
+                balance += loss - fee
+                returns.append(loss - fee)
                 position = None
                 qty_left = 1.0
-                print(f"{symbol} | {i} | STOP LOSS | price={price_now:.2f} | P/L={loss:.2f}")
+                print(f"{symbol} | {i} | STOP LOSS | price={price_now:.2f} | P/L={loss-fee:.2f}")
                 trades.append({
                     "entry": entry_price, "exit": price_now, "type": "SL",
-                    "ret": loss, "start": open_i, "end": i
+                    "ret": loss - fee, "start": open_i, "end": i
                 })
             # حد سود پله‌ای
             elif tp_idx < len(tp_prices) and price_now >= tp_prices[tp_idx]:
                 sell_qty = TP_QTYS[tp_idx]
                 profit = (tp_prices[tp_idx] - entry_price) * sell_qty * balance / entry_price
-                balance += profit
-                returns.append(profit)
+                fee = abs(profit) * FEE_RATE  # کارمزد فروش این بخش
+                balance += profit - fee
+                returns.append(profit - fee)
                 qty_left -= sell_qty
-                print(f"{symbol} | {i} | TAKE PROFIT {tp_idx+1} | price={tp_prices[tp_idx]:.2f} | qty={sell_qty:.2f} | P/L={profit:.2f}")
+                print(f"{symbol} | {i} | TAKE PROFIT {tp_idx+1} | price={tp_prices[tp_idx]:.2f} | qty={sell_qty:.2f} | P/L={profit-fee:.2f}")
                 trades.append({
                     "entry": entry_price, "exit": tp_prices[tp_idx], "type": f"TP{tp_idx+1}",
-                    "ret": profit, "start": open_i, "end": i
+                    "ret": profit - fee, "start": open_i, "end": i
                 })
                 tp_idx += 1
                 if qty_left <= 0.001 or tp_idx == len(tp_prices):
@@ -124,7 +127,7 @@ def backtest(symbol):
     print(f"Profitable Trades: {wins}")
     print(f"Win Rate: {(wins/n_trades*100) if n_trades else 0:.1f}%")
     print(f"Final Balance: {balance:.2f}")
-    print(f"Total Return: {(balance-10000)/10000*100:.2f}%")
+    print(f"Total Return: {100 * (balance-initial_balance)/initial_balance:.2f}%")
     # رسم منحنی سرمایه (در صورت نیاز)
     try:
         import matplotlib.pyplot as plt
@@ -145,6 +148,7 @@ def backtest(symbol):
     }
 
 if __name__ == "__main__":
+    # برای تست با مبلغ دلخواه فقط مقدار initial_balance را تغییر بده (مثلاً 20، 50، 100)
     for symbol in SYMBOLS:
         print(f"--- Backtest for {symbol} ---")
-        backtest(symbol)
+        backtest(symbol, initial_balance=20)
