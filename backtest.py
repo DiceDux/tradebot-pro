@@ -6,12 +6,12 @@ from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
 
-# بک‌تست پله‌ای با مدیریت ریسک و پوزیشن (حفظ منطق اصلی پروژه)
 TP_STEPS = [0.03, 0.05, 0.07]   # پله‌های سود (3٪، 5٪، 7٪)
 TP_QTYS = [0.3, 0.3, 0.4]       # نسبت حجم فروش هر پله
 SL_PCT = 0.02                   # حد ضرر 2 درصد
-THRESHOLD = 0.7                 # حداقل اطمینان برای تریگر سیگنال (پیشنهاد: 0.7)
+THRESHOLD = 0.6                 # حداقل اطمینان برای تریگر سیگنال (درخواست کاربر)
 FEE_RATE = 0.001                # کارمزد صرافی (مثلاً CoinEx، 0.1%)
+TRADE_BALANCE_RATIO = 0.5       # فقط 50 درصد بالانس وارد هر معامله شود
 
 def backtest(symbol, initial_balance=100):
     candles = get_latest_candles(symbol, limit=3000)
@@ -84,14 +84,19 @@ def backtest(symbol, initial_balance=100):
                 tp_prices = [entry_price * (1 + tp) for tp in TP_STEPS]
                 qty_left = 1.0
                 tp_idx = 0
+                trade_balance = balance * TRADE_BALANCE_RATIO  # فقط 50 درصد بالانس وارد معامله
                 n_trades += 1
                 open_i = i
-                print(f"{symbol} | {i} | LONG ENTRY | price={price_now:.2f} | conf={confidence:.2f}")
+                print(f"{symbol} | {i} | LONG ENTRY | price={price_now:.2f} | conf={confidence:.2f} | used_balance={trade_balance:.2f}")
         else:
+            # Trailing Stop: حد ضرر بعد هر TP می‌رود روی TP قبلی
+            trailing_sl = entry_price * (1 - SL_PCT)
+            if tp_idx > 0:
+                trailing_sl = tp_prices[tp_idx-1]
             # حد ضرر
-            if price_now <= sl_price:
-                loss = (price_now - entry_price) * qty_left * balance / entry_price
-                fee = abs(loss) * FEE_RATE  # کارمزد خروج از پوزیشن
+            if price_now <= trailing_sl:
+                loss = (price_now - entry_price) * qty_left * trade_balance / entry_price
+                fee = abs(loss) * FEE_RATE
                 balance += loss - fee
                 returns.append(loss - fee)
                 position = None
@@ -104,8 +109,8 @@ def backtest(symbol, initial_balance=100):
             # حد سود پله‌ای
             elif tp_idx < len(tp_prices) and price_now >= tp_prices[tp_idx]:
                 sell_qty = TP_QTYS[tp_idx]
-                profit = (tp_prices[tp_idx] - entry_price) * sell_qty * balance / entry_price
-                fee = abs(profit) * FEE_RATE  # کارمزد فروش این بخش
+                profit = (tp_prices[tp_idx] - entry_price) * sell_qty * trade_balance / entry_price
+                fee = abs(profit) * FEE_RATE
                 balance += profit - fee
                 returns.append(profit - fee)
                 qty_left -= sell_qty
@@ -148,7 +153,6 @@ def backtest(symbol, initial_balance=100):
     }
 
 if __name__ == "__main__":
-    # برای تست با مبلغ دلخواه فقط مقدار initial_balance را تغییر بده (مثلاً 20، 50، 100)
     for symbol in SYMBOLS:
         print(f"--- Backtest for {symbol} ---")
-        backtest(symbol, initial_balance=20)
+        backtest(symbol, initial_balance=20)  # هر عددی خواستی تست بگیر
