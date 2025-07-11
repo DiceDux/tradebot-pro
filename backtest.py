@@ -44,7 +44,7 @@ def backtest(symbol):
     tp_prices = []
     qty_left = 1.0
     tp_idx = 0
-    balance = 10000  # سرمایه اولیه دلاری
+    balance = 100  # سرمایه اولیه دلاری
     balance_series = []
     returns = []
     n_trades = 0
