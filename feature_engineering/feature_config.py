@@ -1,4 +1,5 @@
 FEATURE_CONFIG = {
+    # اندیکاتورهای کلاسیک و میانگین‌ها
     "ema5": True,
     "ema10": True,
     "ema20": True,
@@ -33,7 +34,7 @@ FEATURE_CONFIG = {
     "high": True,
     "low": True,
     "volume": True,
-    # فیچرهای مدرن و آماری و پرایس اکشن
+    # اندیکاتورهای مدرن، آماری و پرایس اکشن
     "adx14": True,
     "supertrend": True,
     "donchian_high": True,
@@ -47,11 +48,11 @@ FEATURE_CONFIG = {
     "shadow_ratio": True,
     "green_candles_10": True,
     "red_candles_10": True,
-    # کندل پترن‌ها (نمونه، بقیه را اضافه کن)
+    # کندل پترن‌ها (نمونه، بقیه را هم می‌توانی اضافه کنی)
     "engulfing": True,
     "hammer": True,
     "doji": True,
     "morning_star": True,
     "shooting_star": True,
-    # ... اگر خواستی بقیه talib پترن‌ها را هم اضافه کن
+    # سایر فیچرهای قبلی پروژه اگر خاص بود همینجا اضافه کن
 }
