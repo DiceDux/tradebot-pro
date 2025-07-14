@@ -31,14 +31,14 @@ def calculate_vwap(df):
 def build_features(candles_df, news_df, symbol):
     features = {}
 
-    # --- رفع مشکل ts ---
+    # --- رفع مشکل ts برای اخبار ---
     if news_df is not None and not news_df.empty:
         if 'ts' not in news_df.columns:
             if 'published_at' in news_df.columns:
                 news_df = news_df.copy()
                 news_df['ts'] = pd.to_datetime(news_df['published_at']).values.astype('int64') // 10**9
 
-    # =========== تکنیکال، مدرن و آماری ===========
+    # =========== فیچرهای تکنیکال و آماری ===========
     if candles_df is not None and not candles_df.empty:
         close = candles_df['close']
         high = candles_df['high']
@@ -46,7 +46,7 @@ def build_features(candles_df, news_df, symbol):
         open_ = candles_df['open']
         volume = candles_df['volume']
 
-        # --- اندیکاتورهای کلاسیک و EMA/SMA ---
+        # فیچرهای کلاسیک و میانگین‌ها
         if FEATURE_CONFIG.get('ema5'): features['ema5'] = close.ewm(span=5).mean().values[-1]
         if FEATURE_CONFIG.get('ema10'): features['ema10'] = close.ewm(span=10).mean().values[-1]
         if FEATURE_CONFIG.get('ema20'): features['ema20'] = close.ewm(span=20).mean().values[-1]
@@ -55,20 +55,17 @@ def build_features(candles_df, news_df, symbol):
         if FEATURE_CONFIG.get('ema200'): features['ema200'] = close.ewm(span=200).mean().values[-1]
         if FEATURE_CONFIG.get('sma20'): features['sma20'] = close.rolling(window=20).mean().values[-1]
         if FEATURE_CONFIG.get('sma50'): features['sma50'] = close.rolling(window=50).mean().values[-1]
-        # TEMA
         if FEATURE_CONFIG.get('tema20'):
             ema1 = close.ewm(span=20).mean()
             ema2 = ema1.ewm(span=20).mean()
             ema3 = ema2.ewm(span=20).mean()
             features['tema20'] = 3 * (ema1.values[-1] - ema2.values[-1]) + ema3.values[-1]
-        # RSI
         if FEATURE_CONFIG.get('rsi14'):
             delta = close.diff()
             gain = delta.where(delta > 0, 0).rolling(14).mean()
             loss = -delta.where(delta < 0, 0).rolling(14).mean()
             rs = gain / (loss.replace(0, np.nan))
             features['rsi14'] = 100 - (100 / (1 + rs.values[-1])) if not np.isnan(rs.values[-1]) else 50
-        # ATR
         if FEATURE_CONFIG.get('atr14'):
             tr = pd.concat([
                 (high - low),
@@ -76,7 +73,6 @@ def build_features(candles_df, news_df, symbol):
                 (low - close.shift()).abs()
             ], axis=1).max(axis=1)
             features['atr14'] = tr.rolling(14).mean().values[-1]
-        # MACD
         if FEATURE_CONFIG.get('macd') or FEATURE_CONFIG.get('macd_signal') or FEATURE_CONFIG.get('macd_hist'):
             ema12 = close.ewm(span=12).mean()
             ema26 = close.ewm(span=26).mean()
@@ -85,93 +81,73 @@ def build_features(candles_df, news_df, symbol):
             if FEATURE_CONFIG.get('macd'): features['macd'] = macd.values[-1]
             if FEATURE_CONFIG.get('macd_signal'): features['macd_signal'] = signal.values[-1]
             if FEATURE_CONFIG.get('macd_hist'): features['macd_hist'] = (macd - signal).values[-1]
-        # Bollinger Bands
         if FEATURE_CONFIG.get('bb_upper') or FEATURE_CONFIG.get('bb_lower') or FEATURE_CONFIG.get('bb_width'):
             bb_mid = close.rolling(window=20).mean()
             bb_std = close.rolling(window=20).std()
             if FEATURE_CONFIG.get('bb_upper'): features['bb_upper'] = (bb_mid + 2 * bb_std).values[-1]
             if FEATURE_CONFIG.get('bb_lower'): features['bb_lower'] = (bb_mid - 2 * bb_std).values[-1]
             if FEATURE_CONFIG.get('bb_width'): features['bb_width'] = (features.get('bb_upper', 0) - features.get('bb_lower', 0))
-        # OBV & VWAP
         if FEATURE_CONFIG.get("obv"): features['obv'] = calculate_obv(candles_df)
         if FEATURE_CONFIG.get("vwap"): features['vwap'] = calculate_vwap(candles_df)
-        # Stochastic
         if FEATURE_CONFIG.get('stoch_k') or FEATURE_CONFIG.get('stoch_d'):
             low14 = low.rolling(14).min()
             high14 = high.rolling(14).max()
             stoch_k = 100 * (close.values[-1] - low14.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8)
             if FEATURE_CONFIG.get('stoch_k'): features['stoch_k'] = stoch_k
             if FEATURE_CONFIG.get('stoch_d'): features['stoch_d'] = pd.Series([stoch_k]).rolling(3).mean().values[-1]
-        # CCI
         if FEATURE_CONFIG.get('cci'):
             tp = (high + low + close) / 3
             cci = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
             features['cci'] = cci.values[-1]
-        # Williams %R
         if FEATURE_CONFIG.get('willr'):
             low14 = low.rolling(14).min()
             high14 = high.rolling(14).max()
             willr = (high14.values[-1] - close.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8) * -100
             features['willr'] = willr
-        # ROC
         if FEATURE_CONFIG.get('roc'): features['roc'] = close.pct_change(periods=10).values[-1]
-        # PSAR (نمونه ساده)
         if FEATURE_CONFIG.get('psar'): features['psar'] = close.values[-1]
-        # candle change/range
         if FEATURE_CONFIG.get('candle_change'): features['candle_change'] = close.pct_change().values[-1]
         if FEATURE_CONFIG.get('candle_range'): features['candle_range'] = (high - low).values[-1]
-        # Volume features
         if FEATURE_CONFIG.get('volume_mean'): features['volume_mean'] = volume.rolling(20).mean().values[-1]
         if FEATURE_CONFIG.get('volume_spike'): features['volume_spike'] = float(volume.values[-1] > features.get('volume_mean', 0) * 1.5)
-        # Price/volume raw values
         for k in ['close','open','high','low','volume']:
             if FEATURE_CONFIG.get(k): features[k] = candles_df[k].values[-1]
 
-        # ===== اندیکاتورهای مدرن و حجمی و آماری =====
+        # فیچرهای مدرن و آماری و پرایس اکشن
         if ta is not None:
-            # ADX
             if FEATURE_CONFIG.get('adx14'):
                 features['adx14'] = ta.trend.ADXIndicator(high, low, close, window=14).adx().values[-1]
-            # SuperTrend (با STC جایگزین برای نمونه)
             if FEATURE_CONFIG.get('supertrend'):
                 try:
                     features['supertrend'] = ta.trend.stc(close).values[-1]
                 except Exception: features['supertrend'] = np.nan
-            # Donchian Channel
             if FEATURE_CONFIG.get('donchian_high'): features['donchian_high'] = high.rolling(20).max().values[-1]
             if FEATURE_CONFIG.get('donchian_low'): features['donchian_low'] = low.rolling(20).min().values[-1]
-            # Momentum
             if FEATURE_CONFIG.get('momentum5'): features['momentum5'] = close.pct_change(5).values[-1]
             if FEATURE_CONFIG.get('momentum10'): features['momentum10'] = close.pct_change(10).values[-1]
-            # Mean Reversion Bands (z-score)
             if FEATURE_CONFIG.get('mean_reversion_zscore'):
                 mean = close.rolling(20).mean().values[-1]
                 std = close.rolling(20).std().values[-1]
                 features['mean_reversion_zscore'] = (close.values[-1] - mean) / (std + 1e-8)
-            # Volatility (انحراف معیار)
             if FEATURE_CONFIG.get('volatility'): features['volatility'] = close.rolling(20).std().values[-1]
-            # Price gap
             if FEATURE_CONFIG.get('price_gap'): features['price_gap'] = close.values[-1] - close.values[-2]
-            # Shadow ratio
             if FEATURE_CONFIG.get('shadow_ratio'):
                 features['shadow_ratio'] = (high.values[-1] - low.values[-1]) / (abs(close.values[-1] - open_.values[-1]) + 1e-8)
-            # Green/red candles count
             if FEATURE_CONFIG.get('green_candles_10'): features['green_candles_10'] = int((close[-10:] > open_[-10:]).sum())
             if FEATURE_CONFIG.get('red_candles_10'): features['red_candles_10'] = int((close[-10:] < open_[-10:]).sum())
-            # Williams VIX Fix (نمونه)
             if FEATURE_CONFIG.get('williams_vix_fix'):
                 features['williams_vix_fix'] = (high.rolling(22).max().values[-1] - close.values[-1]) / (high.rolling(22).max().values[-1] + 1e-8)
 
-        # ===== کندل پترن‌ها =====
+        # کندل پترن‌ها (talib)
         if talib is not None:
             if FEATURE_CONFIG.get('engulfing'): features['engulfing'] = talib.CDLENGULFING(open_, high, low, close)[-1]
             if FEATURE_CONFIG.get('hammer'): features['hammer'] = talib.CDLHAMMER(open_, high, low, close)[-1]
             if FEATURE_CONFIG.get('doji'): features['doji'] = talib.CDLDOJI(open_, high, low, close)[-1]
             if FEATURE_CONFIG.get('morning_star'): features['morning_star'] = talib.CDLMORNINGSTAR(open_, high, low, close)[-1]
             if FEATURE_CONFIG.get('shooting_star'): features['shooting_star'] = talib.CDLSHOOTINGSTAR(open_, high, low, close)[-1]
-            # ... ادامه تمام پترن‌های talib را می‌توانی اینجا با همین روش اضافه کنی
+            # بقیه پترن‌های talib را هم می‌توانی اضافه کنی
 
-    # =========== فیچرهای خبری (همان ساختار قبلی) ===========
+    # =========== فیچرهای خبری و فاندامنتال ===========
     now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(pd.Timestamp.now().timestamp())
     ranges = {
         '1h': 1*60*60, '6h': 6*60*60, '12h': 12*60*60, '24h': 24*60*60,
