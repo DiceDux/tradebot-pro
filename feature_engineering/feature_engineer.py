@@ -2,10 +2,6 @@ import pandas as pd
 import numpy as np
 from .feature_config import FEATURE_CONFIG
 
-# اگر روی سیستم نصب نیست:
-# pip install ta
-# pip install talib-binary
-
 try:
     import ta
 except ImportError:
@@ -49,6 +45,7 @@ def build_features(candles_df, news_df, symbol):
         low = candles_df['low']
         open_ = candles_df['open']
         volume = candles_df['volume']
+
         # --- اندیکاتورهای کلاسیک و EMA/SMA ---
         if FEATURE_CONFIG.get('ema5'): features['ema5'] = close.ewm(span=5).mean().values[-1]
         if FEATURE_CONFIG.get('ema10'): features['ema10'] = close.ewm(span=10).mean().values[-1]
