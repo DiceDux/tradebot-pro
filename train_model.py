@@ -4,7 +4,10 @@ from utils.config import SYMBOLS
 from data.candle_manager import get_latest_candles
 from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
+from feature_engineering.feature_selector import auto_select_features
 from model.catboost_model import train_model
+from model.catboost_model import FEATURES_PATH
+import joblib
 import os
 
 def make_label(candles, news_df=None, threshold=0.03, future_steps=12, past_steps=12):
@@ -124,3 +127,5 @@ for f in glob.glob("model/catboost_tradebot_pro.pkl") + glob.glob("model/catboos
         print(f"Failed to delete {f}: {e}")
 
 model = train_model(X, y)
+feature_names = joblib.load(FEATURES_PATH)
+auto_select_features(model, feature_names, top_n=30)  # هر تعدادی که خواستی
