@@ -7,16 +7,18 @@ def get_engine():
     return create_engine(url)
 
 def get_latest_news(symbol, hours=NEWS_HOURS):
-    engine = get_engine()
-    # حالت اصلی (مثلاً BTCUSDT)
-    query = """
-        SELECT * FROM news
-        WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR
-        ORDER BY published_at DESC
-    """
-    df = pd.read_sql(query, engine, params=(symbol, hours))
-    # اگر دیتا خالی بود و symbol با USDT تمام می‌شود، حالت کوتاه (BTC) را هم تست کن
-    if df.empty and symbol.endswith("USDT"):
-        short_symbol = symbol.replace("USDT", "")
-        df = pd.read_sql(query, engine, params=(short_symbol, hours))
-    return df
+    try:
+        engine = get_engine()
+        query = """
+            SELECT * FROM news
+            WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR
+            ORDER BY published_at DESC
+        """
+        df = pd.read_sql(query, engine, params=(symbol, hours))
+        if df.empty and symbol.endswith("USDT"):
+            short_symbol = symbol.replace("USDT", "")
+            df = pd.read_sql(query, engine, params=(short_symbol, hours))
+        return df
+    except Exception as e:
+        print(f"[get_latest_news] Error: {e}")
+        return pd.DataFrame()
