@@ -1,5 +1,5 @@
 import numpy as np
-from .feature_config import FEATURE_CONFIG
+from feature_config import FEATURE_CONFIG
 
 def auto_select_features(model, feature_names, top_n=20):
     """
