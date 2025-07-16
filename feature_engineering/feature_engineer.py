@@ -44,20 +44,20 @@ def safe_rsi(close, window):
         return 50
 
 def safe_atr(high, low, close, window):
-    if len(close) >= window:
+    if len(close) >= window + 1:
         tr = pd.concat([
-            (high[-window:] - low[-window:]),
-            (high[-window:] - close[-window:].shift()).abs(),
-            (low[-window:] - close[-window:].shift()).abs()
+            (high[-(window+1):] - low[-(window+1):]),
+            (high[-(window+1):] - close[-(window+1):].shift()).abs(),
+            (low[-(window+1):] - close[-(window+1):].shift()).abs()
         ], axis=1).max(axis=1)
         return tr.rolling(window).mean().values[-1]
     else:
         return 0.0
 
 def safe_macd(close, fast=12, slow=26, signal=9):
-    if len(close) >= slow:
-        ema_fast = close[-slow:].ewm(span=fast).mean()
-        ema_slow = close[-slow:].ewm(span=slow).mean()
+    if len(close) >= slow + 1:
+        ema_fast = close[-(slow+1):].ewm(span=fast).mean()
+        ema_slow = close[-(slow+1):].ewm(span=slow).mean()
         macd = ema_fast - ema_slow
         macd_signal = macd.ewm(span=signal).mean()
         macd_hist = macd - macd_signal
@@ -235,9 +235,10 @@ def build_features(candles_df, news_df, symbol):
 
         # ==== اندیکاتورهای مدرن و پرایس اکشن (با ta) ====
         if ta is not None:
+            # توجه: باید window+1 کندل بدهیم
             if FEATURE_CONFIG.get('adx14'):
-                if len(close) >= 14:
-                    features['adx14'] = ta.trend.ADXIndicator(high[-14:], low[-14:], close[-14:], window=14).adx().values[-1]
+                if len(close) >= 15:
+                    features['adx14'] = ta.trend.ADXIndicator(high[-15:], low[-15:], close[-15:], window=14).adx().values[-1]
                 else:
                     features['adx14'] = 0.0
 
