@@ -1,5 +1,5 @@
 import numpy as np
-from feature_config import FEATURE_CONFIG
+from .feature_config import FEATURE_CONFIG
 
 class FeatureMonitor:
     def __init__(self, model, all_feature_names):
