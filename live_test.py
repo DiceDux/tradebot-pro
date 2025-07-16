@@ -28,6 +28,16 @@ def run_feature_monitor(model, all_feature_names, symbol):
         else:
             news_slice = pd.DataFrame()
         features = build_features(candle_slice, news_slice, symbol)
+        # اصلاح نوع خروجی جهت ساخت دیتافریم
+        if isinstance(features, pd.DataFrame):
+            features = features.iloc[0].to_dict()
+        elif isinstance(features, pd.Series):
+            features = features.to_dict()
+        elif isinstance(features, dict):
+            pass
+        else:
+            print("features type not supported:", type(features))
+            continue
         features_list.append(features)
     X = pd.DataFrame(features_list)
     monitor = FeatureMonitor(model, all_feature_names)
@@ -79,7 +89,19 @@ def live_test():
                     news_slice = pd.DataFrame()
 
                 features = build_features(candle_slice, news_slice, symbol)
-                X = features[symbol_features[symbol]] if symbol in symbol_features else features
+                # اصلاح نوع خروجی جهت پیش‌بینی
+                if isinstance(features, pd.DataFrame):
+                    features = features.iloc[0].to_dict()
+                elif isinstance(features, pd.Series):
+                    features = features.to_dict()
+                elif isinstance(features, dict):
+                    pass
+                else:
+                    print("features type not supported:", type(features))
+                    continue
+                X = pd.DataFrame([features])
+                if symbol in symbol_features:
+                    X = X[symbol_features[symbol]]
                 signal = predict_signals(model, X)[0]
 
                 print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
