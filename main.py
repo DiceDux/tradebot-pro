@@ -6,14 +6,14 @@ from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
 from data.db_manager import save_analysis
 
-INTERVAL = "4h"
+
 
 def main():
     print("TradeBot Pro is running...")
     model, feature_names = load_or_train_model()
     while True:
         for symbol in SYMBOLS:
-            candles = get_latest_candles(symbol, INTERVAL)  # اگر لازم بود limit هم اضافه کن
+            candles = get_latest_candles(symbol)
             news = get_latest_news(symbol)
             features = build_features(candles, news, symbol)
             features_df = features.copy()
