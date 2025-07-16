@@ -62,10 +62,8 @@ all_features = []
 all_labels = []
 all_cols = set()
 
-INTERVAL = "4h"
-
 for symbol in SYMBOLS:
-    candles = get_latest_candles(symbol, INTERVAL, limit=3000)
+    candles = get_latest_candles(symbol, limit=3000)
     news = get_latest_news(symbol, hours=365*24)
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
