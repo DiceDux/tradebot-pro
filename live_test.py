@@ -22,6 +22,15 @@ trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
 latest_prices = {symbol: 0.0 for symbol in LIVE_SYMBOLS}
 
+# این متغیرها باید global باشند تا توسط همه threadها دیده شوند
+positions = {symbol: None for symbol in LIVE_SYMBOLS}
+entry_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
+sl_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
+tp_prices = {symbol: [] for symbol in LIVE_SYMBOLS}
+qty_left = {symbol: 1.0 for symbol in LIVE_SYMBOLS}
+tp_idx = {symbol: 0 for symbol in LIVE_SYMBOLS}
+balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
+
 def run_feature_monitor(model, all_feature_names, symbol):
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
     news = get_latest_news(symbol, hours=NEWS_HOURS)
@@ -74,10 +83,112 @@ def price_updater():
                 status_texts[symbol] = '\n'.join(lines)
             except Exception as e:
                 status_texts[symbol] = f"Symbol: {symbol}\nPrice: --\n(Price error: {e})"
-        time.sleep(5)  # هر 5 ثانیه قیمت را آپدیت کن
+        time.sleep(1)  # هر 1 ثانیه قیمت را آپدیت کن
+
+def tp_sl_watcher():
+    global status_texts, latest_prices, positions, sl_price, tp_prices, tp_idx, qty_left, entry_price, balance, trades_log
+    while True:
+        for symbol in LIVE_SYMBOLS:
+            price_now = latest_prices.get(symbol, 0.0)
+            try:
+                if positions[symbol] == "LONG":
+                    if price_now <= sl_price[symbol]:
+                        pnl = -BALANCE * qty_left[symbol] * SL_PCT
+                        fee = abs(pnl) * 0.001
+                        balance[symbol] += pnl - fee
+                        print(f"[{symbol}] SL HIT! CLOSE LONG at {price_now:.2f}")
+                        trades_log.append({
+                            'symbol': symbol,
+                            'type': 'SL',
+                            'side': 'LONG',
+                            'entry_price': entry_price[symbol],
+                            'exit_price': price_now,
+                            'qty': qty_left[symbol],
+                            'pnl': pnl,
+                            'fee': fee,
+                            'balance': balance[symbol],
+                            'timestamp': time.time()
+                        })
+                        save_trades_log()
+                        positions[symbol] = None
+                        qty_left[symbol] = 1.0
+                    elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now >= tp_prices[symbol][tp_idx[symbol]]:
+                        tp_qty = TP_QTYS[tp_idx[symbol]]
+                        pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
+                        fee = abs(pnl) * 0.001
+                        balance[symbol] += pnl - fee
+                        print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE LONG at {price_now:.2f}, qty={tp_qty}")
+                        trades_log.append({
+                            'symbol': symbol,
+                            'type': f'TP{tp_idx[symbol]+1}',
+                            'side': 'LONG',
+                            'entry_price': entry_price[symbol],
+                            'exit_price': price_now,
+                            'qty': tp_qty,
+                            'pnl': pnl,
+                            'fee': fee,
+                            'balance': balance[symbol],
+                            'timestamp': time.time()
+                        })
+                        save_trades_log()
+                        qty_left[symbol] -= tp_qty
+                        tp_idx[symbol] += 1
+                        if qty_left[symbol] <= 0:
+                            print(f"[{symbol}] ALL TP HIT! FULL CLOSE LONG")
+                            positions[symbol] = None
+                            qty_left[symbol] = 1.0
+                elif positions[symbol] == "SHORT":
+                    if price_now >= sl_price[symbol]:
+                        pnl = -BALANCE * qty_left[symbol] * SL_PCT
+                        fee = abs(pnl) * 0.001
+                        balance[symbol] += pnl - fee
+                        print(f"[{symbol}] SL HIT! CLOSE SHORT at {price_now:.2f}")
+                        trades_log.append({
+                            'symbol': symbol,
+                            'type': 'SL',
+                            'side': 'SHORT',
+                            'entry_price': entry_price[symbol],
+                            'exit_price': price_now,
+                            'qty': qty_left[symbol],
+                            'pnl': pnl,
+                            'fee': fee,
+                            'balance': balance[symbol],
+                            'timestamp': time.time()
+                        })
+                        save_trades_log()
+                        positions[symbol] = None
+                        qty_left[symbol] = 1.0
+                    elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now <= tp_prices[symbol][tp_idx[symbol]]:
+                        tp_qty = TP_QTYS[tp_idx[symbol]]
+                        pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
+                        fee = abs(pnl) * 0.001
+                        balance[symbol] += pnl - fee
+                        print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE SHORT at {price_now:.2f}, qty={tp_qty}")
+                        trades_log.append({
+                            'symbol': symbol,
+                            'type': f'TP{tp_idx[symbol]+1}',
+                            'side': 'SHORT',
+                            'entry_price': entry_price[symbol],
+                            'exit_price': price_now,
+                            'qty': tp_qty,
+                            'pnl': pnl,
+                            'fee': fee,
+                            'balance': balance[symbol],
+                            'timestamp': time.time()
+                        })
+                        save_trades_log()
+                        qty_left[symbol] -= tp_qty
+                        tp_idx[symbol] += 1
+                        if qty_left[symbol] <= 0:
+                            print(f"[{symbol}] ALL TP HIT! FULL CLOSE SHORT")
+                            positions[symbol] = None
+                            qty_left[symbol] = 1.0
+            except Exception as e:
+                print(f"[{symbol}] TP/SL Watcher ERROR: {e}")
+        time.sleep(1)  # هر 1 ثانیه بررسی کن
 
 def live_test():
-    global status_texts
+    global status_texts, positions, entry_price, sl_price, tp_prices, qty_left, tp_idx, balance, trades_log
     model, all_feature_names = load_or_train_model()
     symbol_features = {}
     for symbol in LIVE_SYMBOLS:
@@ -85,22 +196,13 @@ def live_test():
         feature_names = run_feature_monitor(model, all_feature_names, symbol)
         symbol_features[symbol] = feature_names
 
-    balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
-    positions = {symbol: None for symbol in LIVE_SYMBOLS}
-    entry_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
-    sl_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
-    tp_prices = {symbol: [] for symbol in LIVE_SYMBOLS}
-    qty_left = {symbol: 1.0 for symbol in LIVE_SYMBOLS}
-    tp_idx = {symbol: 0 for symbol in LIVE_SYMBOLS}
-    trade_balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
-
     print("===== Starting LIVE trading/test =====")
     last_main_loop = 0
 
     while True:
         now = time.time()
         if now - last_main_loop < 60:  # هر 1 دقیقه تحلیل انجام شود
-            time.sleep(5)
+            time.sleep(1)
             continue
         last_main_loop = now
 
@@ -162,7 +264,7 @@ def live_test():
                 if recent_trades:
                     status_lines.append("Last Trades:")
                     for t in recent_trades:
-                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | QTY: {t.get('qty','-')} | PNL: {t.get('pnl','-'):.2f} | Fee: {t.get('fee',0):.4f}")
+                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | QTY: {t.get('qty','-')} | PNL: {t.get('pnl','-') if 'pnl' in t else '-'} | Fee: {t.get('fee',0):.4f}")
 
                 status_texts[symbol] = '\n'.join(status_lines)
 
@@ -201,101 +303,6 @@ def live_test():
                             'timestamp': time.time()
                         })
                         save_trades_log()
-                else:
-                    fee_rate = 0.001
-                    if positions[symbol] == "LONG":
-                        if price_now <= sl_price[symbol]:
-                            pnl = -BALANCE * qty_left[symbol] * SL_PCT
-                            fee = abs(pnl) * fee_rate
-                            balance[symbol] += pnl - fee
-                            print(f"[{symbol}] SL HIT! CLOSE LONG at {price_now:.2f}")
-                            trades_log.append({
-                                'symbol': symbol,
-                                'type': 'SL',
-                                'side': 'LONG',
-                                'entry_price': entry_price[symbol],
-                                'exit_price': price_now,
-                                'qty': qty_left[symbol],
-                                'pnl': pnl,
-                                'fee': fee,
-                                'balance': balance[symbol],
-                                'timestamp': time.time()
-                            })
-                            save_trades_log()
-                            positions[symbol] = None
-                            qty_left[symbol] = 1.0
-                        elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now >= tp_prices[symbol][tp_idx[symbol]]:
-                            tp_qty = TP_QTYS[tp_idx[symbol]]
-                            pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
-                            fee = abs(pnl) * fee_rate
-                            balance[symbol] += pnl - fee
-                            print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE LONG at {price_now:.2f}, qty={tp_qty}")
-                            trades_log.append({
-                                'symbol': symbol,
-                                'type': f'TP{tp_idx[symbol]+1}',
-                                'side': 'LONG',
-                                'entry_price': entry_price[symbol],
-                                'exit_price': price_now,
-                                'qty': tp_qty,
-                                'pnl': pnl,
-                                'fee': fee,
-                                'balance': balance[symbol],
-                                'timestamp': time.time()
-                            })
-                            save_trades_log()
-                            qty_left[symbol] -= tp_qty
-                            tp_idx[symbol] += 1
-                            if qty_left[symbol] <= 0:
-                                print(f"[{symbol}] ALL TP HIT! FULL CLOSE LONG")
-                                positions[symbol] = None
-                                qty_left[symbol] = 1.0
-                    elif positions[symbol] == "SHORT":
-                        if price_now >= sl_price[symbol]:
-                            pnl = -BALANCE * qty_left[symbol] * SL_PCT
-                            fee = abs(pnl) * fee_rate
-                            balance[symbol] += pnl - fee
-                            print(f"[{symbol}] SL HIT! CLOSE SHORT at {price_now:.2f}")
-                            trades_log.append({
-                                'symbol': symbol,
-                                'type': 'SL',
-                                'side': 'SHORT',
-                                'entry_price': entry_price[symbol],
-                                'exit_price': price_now,
-                                'qty': qty_left[symbol],
-                                'pnl': pnl,
-                                'fee': fee,
-                                'balance': balance[symbol],
-                                'timestamp': time.time()
-                            })
-                            save_trades_log()
-                            positions[symbol] = None
-                            qty_left[symbol] = 1.0
-                        elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now <= tp_prices[symbol][tp_idx[symbol]]:
-                            tp_qty = TP_QTYS[tp_idx[symbol]]
-                            pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
-                            fee = abs(pnl) * fee_rate
-                            balance[symbol] += pnl - fee
-                            print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE SHORT at {price_now:.2f}, qty={tp_qty}")
-                            trades_log.append({
-                                'symbol': symbol,
-                                'type': f'TP{tp_idx[symbol]+1}',
-                                'side': 'SHORT',
-                                'entry_price': entry_price[symbol],
-                                'exit_price': price_now,
-                                'qty': tp_qty,
-                                'pnl': pnl,
-                                'fee': fee,
-                                'balance': balance[symbol],
-                                'timestamp': time.time()
-                            })
-                            save_trades_log()
-                            qty_left[symbol] -= tp_qty
-                            tp_idx[symbol] += 1
-                            if qty_left[symbol] <= 0:
-                                print(f"[{symbol}] ALL TP HIT! FULL CLOSE SHORT")
-                                positions[symbol] = None
-                                qty_left[symbol] = 1.0
-
             except Exception as e:
                 print(f"[{symbol}] ERROR: {e}")
 
@@ -311,9 +318,8 @@ def main():
     root.title("Live TP/SL & Price")
     label = tk.Label(root, text="Waiting for updates...", font=("Arial", 13), justify="left")
     label.pack(padx=20, pady=20)
-    # اجرای حلقه قیمت لحظه‌ای در یک thread جدا
     threading.Thread(target=price_updater, daemon=True).start()
-    # اجرای live_test در یک thread جدا
+    threading.Thread(target=tp_sl_watcher, daemon=True).start()
     threading.Thread(target=live_test, daemon=True).start()
     update_func = update_gui(label)
     label.after(1000, update_func)
