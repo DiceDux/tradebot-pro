@@ -28,7 +28,7 @@ def run_feature_monitor(model, all_feature_names, symbol):
         else:
             news_slice = pd.DataFrame()
         features = build_features(candle_slice, news_slice, symbol)
-        # اصلاح نوع خروجی جهت ساخت دیتافریم
+        # تبدیل به dict برای ساخت DataFrame صحیح
         if isinstance(features, pd.DataFrame):
             features = features.iloc[0].to_dict()
         elif isinstance(features, pd.Series):
@@ -89,7 +89,7 @@ def live_test():
                     news_slice = pd.DataFrame()
 
                 features = build_features(candle_slice, news_slice, symbol)
-                # اصلاح نوع خروجی جهت پیش‌بینی
+                # تبدیل به dict
                 if isinstance(features, pd.DataFrame):
                     features = features.iloc[0].to_dict()
                 elif isinstance(features, pd.Series):
@@ -101,8 +101,11 @@ def live_test():
                     continue
                 X = pd.DataFrame([features])
                 if symbol in symbol_features:
-                    X = X[symbol_features[symbol]]
-                signal = predict_signals(model, X)[0]
+                    feature_names = symbol_features[symbol]
+                else:
+                    feature_names = X.columns.tolist()
+                # اصلاح فراخوانی تابع predict_signals با 3 آرگومان
+                signal = predict_signals(model, feature_names, X)[0]
 
                 print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
 
