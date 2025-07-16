@@ -116,7 +116,10 @@ def build_features(candles_df, news_df, symbol):
         # فیچرهای مدرن و آماری و پرایس اکشن
         if ta is not None:
             if FEATURE_CONFIG.get('adx14'):
-                features['adx14'] = ta.trend.ADXIndicator(high, low, close, window=14).adx().values[-1]
+                if len(close) >= 14:
+                    features['adx14'] = ta.trend.ADXIndicator(high, low, close, window=14).adx().values[-1]
+                else:
+                    features['adx14'] = 0.0    
             if FEATURE_CONFIG.get('supertrend'):
                 try:
                     features['supertrend'] = ta.trend.stc(close).values[-1]
