@@ -15,10 +15,9 @@ SL_PCT = 0.02
 THRESHOLD = 0.7
 NEWS_HOURS = 48
 CANDLE_LIMIT = 120
-INTERVAL = "4h"  # تایم‌فریم دلخواه
 
 def run_feature_monitor(model, all_feature_names, symbol):
-    candles = get_latest_candles(symbol, INTERVAL, CANDLE_LIMIT)
+    candles = get_latest_candles(symbol, CANDLE_LIMIT)
     news = get_latest_news(symbol, hours=NEWS_HOURS)
     features_list = []
     for i in range(len(candles) - 100, len(candles)):
@@ -64,7 +63,7 @@ def live_test():
 
         for symbol in LIVE_SYMBOLS:
             try:
-                candles = get_latest_candles(symbol, INTERVAL, CANDLE_LIMIT)
+                candles = get_latest_candles(symbol, CANDLE_LIMIT)
                 price_now = get_realtime_price(symbol)
                 news = get_latest_news(symbol, hours=NEWS_HOURS)
 
