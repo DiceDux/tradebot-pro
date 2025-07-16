@@ -18,33 +18,8 @@ THRESHOLD = 0.7
 NEWS_HOURS = 48
 CANDLE_LIMIT = 120
 
-# --- پنجره ساده برای نمایش قیمت و وضعیت معامله ---
-class TradeStatusWindow(threading.Thread):
-    def __init__(self):
-        super().__init__()
-        self.root = tk.Tk()
-        self.root.title("Live TP/SL & Price")
-        self.label = tk.Label(self.root, text="Waiting for updates...", font=("Arial", 14), justify="left")
-        self.label.pack(padx=20, pady=20)
-        self.status_text = ""
-        self.daemon = True
-
-    def run(self):
-        self.update_label()
-        self.root.mainloop()
-
-    def update_status(self, text):
-        self.status_text = text
-
-    def update_label(self):
-        self.label.config(text=self.status_text)
-        self.root.after(1000, self.update_label)
-
-trade_window = TradeStatusWindow()
-trade_window.start()
-# --- پایان تعریف پنجره ---
-
 trades_log = []
+status_text = ""  # برای ذخیره وضعیت نمایش داده شده
 
 def run_feature_monitor(model, all_feature_names, symbol):
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
@@ -58,7 +33,6 @@ def run_feature_monitor(model, all_feature_names, symbol):
         else:
             news_slice = pd.DataFrame()
         features = build_features(candle_slice, news_slice, symbol)
-        # تبدیل به dict برای ساخت DataFrame صحیح
         if isinstance(features, pd.DataFrame):
             features = features.iloc[0].to_dict()
         elif isinstance(features, pd.Series):
@@ -79,6 +53,7 @@ def save_trades_log():
         pd.DataFrame(trades_log).to_csv("trades.csv", index=False)
 
 def live_test():
+    global status_text
     model, all_feature_names = load_or_train_model()
     symbol_features = {}
     for symbol in LIVE_SYMBOLS:
@@ -139,10 +114,8 @@ def live_test():
                     feature_names = X.columns.tolist()
                 signal = predict_signals(model, feature_names, X)[0]
 
-                # فقط در CMD این اطلاعات ساده را نمایش بده
                 print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
 
-                # متن وضعیت برای نمایش پنجره گرافیکی
                 status_lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
@@ -155,7 +128,7 @@ def live_test():
                     status_lines.append(f"TPs: {', '.join([f'{tp:.2f}' for tp in tp_prices[symbol]])}")
                     status_lines.append(f"TP idx: {tp_idx[symbol]}")
                     status_lines.append(f"QTY left: {qty_left[symbol]:.2f}")
-                trade_window.update_status('\n'.join(status_lines))
+                status_text = '\n'.join(status_lines)
 
                 if positions[symbol] is None:
                     if signal == 2:
@@ -290,5 +263,23 @@ def live_test():
             except Exception as e:
                 print(f"[{symbol}] ERROR: {e}")
 
+def update_gui(label):
+    def gui_loop():
+        label.config(text=status_text)
+        label.after(1000, gui_loop)
+    return gui_loop
+
+def main():
+    root = tk.Tk()
+    root.title("Live TP/SL & Price")
+    label = tk.Label(root, text="Waiting for updates...", font=("Arial", 14), justify="left")
+    label.pack(padx=20, pady=20)
+    # اجرای live_test در یک thread جدا
+    threading.Thread(target=live_test, daemon=True).start()
+    # اجرای حلقه آپدیت label
+    update_func = update_gui(label)
+    label.after(1000, update_func)
+    root.mainloop()
+
 if __name__ == "__main__":
-    live_test()
+    main()
