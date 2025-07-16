@@ -235,10 +235,18 @@ def build_features(candles_df, news_df, symbol):
 
         # ==== اندیکاتورهای مدرن و پرایس اکشن (با ta) ====
         if ta is not None:
-            # توجه: باید window+1 کندل بدهیم
+            # توجه: باید window+1 کندل بدهیم و مقدار واقعی آرایه را چک کنیم و خطا را بگیریم
+            adx_window = 14
+            adx_min = adx_window + 1
             if FEATURE_CONFIG.get('adx14'):
-                if len(close) >= 15:
-                    features['adx14'] = ta.trend.ADXIndicator(high[-15:], low[-15:], close[-15:], window=14).adx().values[-1]
+                if len(close) >= adx_min and len(high) >= adx_min and len(low) >= adx_min:
+                    try:
+                        adx_vals = ta.trend.ADXIndicator(
+                            high[-adx_min:], low[-adx_min:], close[-adx_min:], window=adx_window
+                        ).adx().values
+                        features['adx14'] = adx_vals[-1] if len(adx_vals) > 0 else 0.0
+                    except Exception:
+                        features['adx14'] = 0.0
                 else:
                     features['adx14'] = 0.0
 
