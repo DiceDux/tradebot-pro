@@ -12,9 +12,10 @@ SL_PCT = 0.02                   # حد ضرر 2 درصد
 THRESHOLD = 0.6                 # حداقل اطمینان برای تریگر سیگنال (درخواست کاربر)
 FEE_RATE = 0.001                # کارمزد صرافی (مثلاً CoinEx، 0.1%)
 TRADE_BALANCE_RATIO = 0.5       # فقط 50 درصد بالانس وارد هر معامله شود
+INTERVAL = "4h"  # یا هر تایم‌فریم دلخواه
 
 def backtest(symbol, initial_balance=100):
-    candles = get_latest_candles(symbol, limit=3000)
+    candles = get_latest_candles(symbol, INTERVAL, limit=3000)  # اضافه کردن INTERVAL
     news = get_latest_news(symbol, hours=365*24)
     try:
         model, feature_names = load_or_train_model()
