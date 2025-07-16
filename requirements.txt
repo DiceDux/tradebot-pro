@@ -1,5 +1,9 @@
 pandas
 numpy
-pymysql
 catboost
+ta
+talib-binary
+requests
+sqlalchemy
+pymysql
 joblib
