@@ -20,6 +20,7 @@ CANDLE_LIMIT = 120
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
+latest_prices = {symbol: 0.0 for symbol in LIVE_SYMBOLS}
 
 def run_feature_monitor(model, all_feature_names, symbol):
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
@@ -52,6 +53,29 @@ def save_trades_log():
     if trades_log:
         pd.DataFrame(trades_log).to_csv("trades.csv", index=False)
 
+def price_updater():
+    """حلقه گرفتن قیمت لحظه‌ای و آپدیت سریع tkinter"""
+    global status_texts, latest_prices
+    while True:
+        for symbol in LIVE_SYMBOLS:
+            try:
+                price_now = get_realtime_price(symbol)
+                latest_prices[symbol] = price_now
+                # اگر پوزیشن فعال نیست، فقط قیمت و وضعیت را نشان بده
+                lines = [
+                    f"Symbol: {symbol}",
+                    f"Price: {price_now:.2f}",
+                ]
+                if status_texts[symbol]:
+                    old_lines = status_texts[symbol].split('\n')
+                    for old_line in old_lines:
+                        if old_line.startswith("Signal:") or old_line.startswith("Balance:") or old_line.startswith("Entry:") or old_line.startswith("SL:") or old_line.startswith("TP") or old_line.startswith("QTY") or old_line.startswith("Position") or old_line.startswith("Last Trades:") or old_line.startswith("No active position"):
+                            lines.append(old_line)
+                status_texts[symbol] = '\n'.join(lines)
+            except Exception as e:
+                status_texts[symbol] = f"Symbol: {symbol}\nPrice: --\n(Price error: {e})"
+        time.sleep(5)  # هر 5 ثانیه قیمت را آپدیت کن
+
 def live_test():
     global status_texts
     model, all_feature_names = load_or_train_model()
@@ -75,15 +99,15 @@ def live_test():
 
     while True:
         now = time.time()
-        if now - last_main_loop < 300:
+        if now - last_main_loop < 60:  # هر 1 دقیقه تحلیل انجام شود
             time.sleep(5)
             continue
         last_main_loop = now
 
         for symbol in LIVE_SYMBOLS:
             try:
+                price_now = latest_prices.get(symbol, 0.0)
                 candles = get_latest_candles(symbol, CANDLE_LIMIT)
-                price_now = get_realtime_price(symbol)
                 news = get_latest_news(symbol, hours=NEWS_HOURS)
 
                 new_candle = candles.iloc[-1].copy()
@@ -287,6 +311,9 @@ def main():
     root.title("Live TP/SL & Price")
     label = tk.Label(root, text="Waiting for updates...", font=("Arial", 13), justify="left")
     label.pack(padx=20, pady=20)
+    # اجرای حلقه قیمت لحظه‌ای در یک thread جدا
+    threading.Thread(target=price_updater, daemon=True).start()
+    # اجرای live_test در یک thread جدا
     threading.Thread(target=live_test, daemon=True).start()
     update_func = update_gui(label)
     label.after(1000, update_func)
