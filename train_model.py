@@ -76,6 +76,8 @@ for symbol in SYMBOLS:
 
     for i in range(len(candles)):
         candle_slice = candles.iloc[max(0, i-99):i+1]
+        if len(candle_slice) < 20:  # یا هر عددی که برای محاسبه اندیکاتورهای پیچیده لازم است (مثلاً 20 برای ADX و BB و ...)
+            continue
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time] if not news.empty else pd.DataFrame()
         if i % 200 == 0:
