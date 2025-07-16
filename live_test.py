@@ -14,10 +14,10 @@ TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
 THRESHOLD = 0.7
 NEWS_HOURS = 48  # یا بیشتر، بستگی به فیچرها
+CANDLE_LIMIT = 120  # کندل کافی برای همه فیچرها
 
 def run_feature_monitor(model, all_feature_names, symbol):
-    # آماده‌سازی دیتافریم فیچر برای بازارسنجی
-    candles = get_latest_candles(symbol, interval="4h", limit=120)
+    candles = get_latest_candles(symbol, interval="4h", limit=CANDLE_LIMIT)
     news = get_latest_news(symbol, hours=NEWS_HOURS)
     features_list = []
     for i in range(len(candles) - 100, len(candles)):
@@ -36,7 +36,6 @@ def run_feature_monitor(model, all_feature_names, symbol):
 
 def live_test():
     model, all_feature_names = load_or_train_model()
-    # برای هر نماد بازارسنجی کن و فیچرهای فعال را جدا نگه دار
     symbol_features = {}
     for symbol in LIVE_SYMBOLS:
         print(f"Running feature monitor for {symbol} ...")
@@ -53,71 +52,99 @@ def live_test():
     trade_balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
 
     print("===== Starting LIVE trading/test =====")
+    last_main_loop = 0
+
     while True:
+        # توقف 5 دقیقه‌ای فقط برای تحلیل و تصمیم‌گیری اصلی، نه برای قیمت و SL/TP
+        now = time.time()
+        if now - last_main_loop < 300:  # 300 ثانیه = 5 دقیقه
+            time.sleep(5)  # هر 5 ثانیه یک بار چک می‌کند تا 5 دقیقه بگذرد، نه توقف کامل!
+            continue
+        last_main_loop = now
+
         for symbol in LIVE_SYMBOLS:
             try:
-                # گرفتن کندل و قیمت زنده
-                candles = get_latest_candles(symbol, interval="4h", limit=120)
+                # گرفتن کندل و قیمت لحظه‌ای بدون توقف!
+                candles = get_latest_candles(symbol, interval="4h", limit=CANDLE_LIMIT)
                 price_now = get_realtime_price(symbol)
                 news = get_latest_news(symbol, hours=NEWS_HOURS)
+
                 # ساخت کندل جدید با قیمت زنده
                 new_candle = candles.iloc[-1].copy()
-                new_candle["close"] = price_now
-                new_candle["timestamp"] = int(time.time())
-                candles = pd.concat([candles, pd.DataFrame([new_candle])], ignore_index=True)
-                # ساخت فیچر با اخبار و کندل
-                candle_slice = candles.iloc[-100:]  # آخرین 100 کندل
+                new_candle['close'] = price_now
+                candle_slice = candles.copy()
+                candle_slice.iloc[-1] = new_candle
+
                 if not news.empty:
                     candle_time = pd.to_datetime(new_candle['timestamp'], unit='s')
                     news_slice = news[news['published_at'] <= candle_time]
                 else:
                     news_slice = pd.DataFrame()
-                features = build_features(candle_slice, news_slice, symbol)
-                features_df = pd.DataFrame([features]).reindex(columns=symbol_features[symbol], fill_value=0)
-                # پیش‌بینی مدل
-                signal, analysis = predict_signals(model, symbol_features[symbol], features_df)
-                confidence = analysis.get("confidence", 0.0)
-                if confidence < THRESHOLD:
-                    signal = "Hold"
 
-                # مدیریت پوزیشن و TP/SL (شبیه بک‌تست)
-                pos = positions[symbol]
-                if pos is None:
-                    if signal == "Buy":
-                        positions[symbol] = "long"
+                # ساخت فیچرها و پیش‌بینی سیگنال
+                features = build_features(candle_slice, news_slice, symbol)
+                X = features[symbol_features[symbol]] if symbol in symbol_features else features
+                signal = predict_signals(model, X)[0]  # فرض بر این که predict_signals یک آرایه برمی‌گرداند
+
+                print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
+
+                # مدیریت پوزیشن و سفارش‌ها:
+                if positions[symbol] is None:
+                    if signal == 2:
+                        # سیگنال خرید
+                        positions[symbol] = "LONG"
                         entry_price[symbol] = price_now
                         sl_price[symbol] = price_now * (1 - SL_PCT)
-                        tp_prices[symbol] = [price_now * (1 + tp) for tp in TP_STEPS]
+                        tp_prices[symbol] = [price_now * (1 + x) for x in TP_STEPS]
                         qty_left[symbol] = 1.0
                         tp_idx[symbol] = 0
-                        trade_balance[symbol] = balance[symbol] * 1.0  # 100% بالانس هر نماد وارد معامله
-                        print(f"[{symbol}] LONG ENTRY | price={price_now:.2f} | conf={confidence:.2f} | used_balance={trade_balance[symbol]:.2f}")
-                else:
-                    trailing_sl = entry_price[symbol] * (1 - SL_PCT)
-                    if tp_idx[symbol] > 0:
-                        trailing_sl = tp_prices[symbol][tp_idx[symbol] - 1]
-                    # حد ضرر
-                    if price_now <= trailing_sl:
-                        loss = (price_now - entry_price[symbol]) * qty_left[symbol] * trade_balance[symbol] / entry_price[symbol]
-                        balance[symbol] += loss
-                        print(f"[{symbol}] STOP LOSS | price={price_now:.2f} | P/L={loss:.2f} | bal={balance[symbol]:.2f}")
-                        positions[symbol] = None
+                        print(f"[{symbol}] BUY at {price_now:.2f}, SL={sl_price[symbol]:.2f}, TP={tp_prices[symbol]}")
+                    elif signal == 0:
+                        # سیگنال فروش
+                        positions[symbol] = "SHORT"
+                        entry_price[symbol] = price_now
+                        sl_price[symbol] = price_now * (1 + SL_PCT)
+                        tp_prices[symbol] = [price_now * (1 - x) for x in TP_STEPS]
                         qty_left[symbol] = 1.0
-                    # حد سود پله‌ای
-                    elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now >= tp_prices[symbol][tp_idx[symbol]]:
-                        sell_qty = TP_QTYS[tp_idx[symbol]]
-                        profit = (tp_prices[symbol][tp_idx[symbol]] - entry_price[symbol]) * sell_qty * trade_balance[symbol] / entry_price[symbol]
-                        balance[symbol] += profit
-                        qty_left[symbol] -= sell_qty
-                        print(f"[{symbol}] TAKE PROFIT {tp_idx[symbol]+1} | price={tp_prices[symbol][tp_idx[symbol]]:.2f} | qty={sell_qty:.2f} | P/L={profit:.2f} | bal={balance[symbol]:.2f}")
-                        tp_idx[symbol] += 1
-                        if qty_left[symbol] <= 0.001 or tp_idx[symbol] == len(tp_prices[symbol]):
+                        tp_idx[symbol] = 0
+                        print(f"[{symbol}] SELL at {price_now:.2f}, SL={sl_price[symbol]:.2f}, TP={tp_prices[symbol]}")
+                else:
+                    # مدیریت TP و SL بدون توقف
+                    if positions[symbol] == "LONG":
+                        if price_now <= sl_price[symbol]:
+                            print(f"[{symbol}] SL HIT! CLOSE LONG at {price_now:.2f}")
                             positions[symbol] = None
+                            balance[symbol] -= BALANCE * qty_left[symbol] * SL_PCT
                             qty_left[symbol] = 1.0
-                print(f"[{symbol}] signal={signal} | conf={confidence:.2f} | price={price_now:.2f} | bal={balance[symbol]:.2f}")
+                        elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now >= tp_prices[symbol][tp_idx[symbol]]:
+                            tp_qty = TP_QTYS[tp_idx[symbol]]
+                            print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE LONG at {price_now:.2f}, qty={tp_qty}")
+                            balance[symbol] += BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
+                            qty_left[symbol] -= tp_qty
+                            tp_idx[symbol] += 1
+                            if qty_left[symbol] <= 0:
+                                print(f"[{symbol}] ALL TP HIT! FULL CLOSE LONG")
+                                positions[symbol] = None
+                                qty_left[symbol] = 1.0
+                    elif positions[symbol] == "SHORT":
+                        if price_now >= sl_price[symbol]:
+                            print(f"[{symbol}] SL HIT! CLOSE SHORT at {price_now:.2f}")
+                            positions[symbol] = None
+                            balance[symbol] -= BALANCE * qty_left[symbol] * SL_PCT
+                            qty_left[symbol] = 1.0
+                        elif tp_idx[symbol] < len(tp_prices[symbol]) and price_now <= tp_prices[symbol][tp_idx[symbol]]:
+                            tp_qty = TP_QTYS[tp_idx[symbol]]
+                            print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE SHORT at {price_now:.2f}, qty={tp_qty}")
+                            balance[symbol] += BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
+                            qty_left[symbol] -= tp_qty
+                            tp_idx[symbol] += 1
+                            if qty_left[symbol] <= 0:
+                                print(f"[{symbol}] ALL TP HIT! FULL CLOSE SHORT")
+                                positions[symbol] = None
+                                qty_left[symbol] = 1.0
+
             except Exception as e:
                 print(f"[{symbol}] ERROR: {e}")
-        time.sleep(60)
 
 if __name__ == "__main__":
     live_test()
