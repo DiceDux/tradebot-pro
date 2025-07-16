@@ -19,7 +19,7 @@ NEWS_HOURS = 48
 CANDLE_LIMIT = 120
 
 trades_log = []
-status_text = ""  # برای ذخیره وضعیت نمایش داده شده
+status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
 
 def run_feature_monitor(model, all_feature_names, symbol):
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
@@ -53,7 +53,7 @@ def save_trades_log():
         pd.DataFrame(trades_log).to_csv("trades.csv", index=False)
 
 def live_test():
-    global status_text
+    global status_texts
     model, all_feature_names = load_or_train_model()
     symbol_features = {}
     for symbol in LIVE_SYMBOLS:
@@ -116,19 +116,31 @@ def live_test():
 
                 print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
 
+                # جمع آوری اطلاعات پله ها و وضعیت ها برای هر ارز
                 status_lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
                     f"Signal: {signal}",
-                    f"Balance: {balance[symbol]:.2f}",
+                    f"Balance: {balance[symbol]:.2f}"
                 ]
                 if positions[symbol] is not None:
                     status_lines.append(f"Entry: {entry_price[symbol]:.2f}")
                     status_lines.append(f"SL: {sl_price[symbol]:.2f}")
-                    status_lines.append(f"TPs: {', '.join([f'{tp:.2f}' for tp in tp_prices[symbol]])}")
-                    status_lines.append(f"TP idx: {tp_idx[symbol]}")
+                    tps = [f"TP{idx+1}: {tp:.2f} | QTY: {TP_QTYS[idx]}" for idx, tp in enumerate(tp_prices[symbol])]
+                    status_lines.extend(tps)
+                    status_lines.append(f"TP idx (پله فعال): {tp_idx[symbol]}")
                     status_lines.append(f"QTY left: {qty_left[symbol]:.2f}")
-                status_text = '\n'.join(status_lines)
+                    status_lines.append(f"Position: {positions[symbol]}")
+                else:
+                    status_lines.append("No active position")
+                # تاریخچه معاملات مختصر برای هر ارز
+                recent_trades = [trade for trade in trades_log if trade['symbol'] == symbol][-5:]
+                if recent_trades:
+                    status_lines.append("Last Trades:")
+                    for t in recent_trades:
+                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | QTY: {t.get('qty','-')} | PNL: {t.get('pnl','-'):.2f} | Fee: {t.get('fee',0):.4f}")
+
+                status_texts[symbol] = '\n'.join(status_lines)
 
                 if positions[symbol] is None:
                     if signal == 2:
@@ -265,18 +277,17 @@ def live_test():
 
 def update_gui(label):
     def gui_loop():
-        label.config(text=status_text)
+        all_status = '\n\n'.join([status_texts[symbol] for symbol in LIVE_SYMBOLS])
+        label.config(text=all_status)
         label.after(1000, gui_loop)
     return gui_loop
 
 def main():
     root = tk.Tk()
     root.title("Live TP/SL & Price")
-    label = tk.Label(root, text="Waiting for updates...", font=("Arial", 14), justify="left")
+    label = tk.Label(root, text="Waiting for updates...", font=("Arial", 13), justify="left")
     label.pack(padx=20, pady=20)
-    # اجرای live_test در یک thread جدا
     threading.Thread(target=live_test, daemon=True).start()
-    # اجرای حلقه آپدیت label
     update_func = update_gui(label)
     label.after(1000, update_func)
     root.mainloop()
