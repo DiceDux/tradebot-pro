@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from feature_config import FEATURE_CONFIG
+from .feature_config import FEATURE_CONFIG
 
 try:
     import ta
