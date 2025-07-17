@@ -1,8 +1,10 @@
 FEATURE_CONFIG = {
     # اندیکاتورهای کلاسیک و میانگین‌ها
     "ema5": True,
+    "ema9": True,
     "ema10": True,
     "ema20": True,
+    "ema21": True,
     "ema50": True,
     "ema100": True,
     "ema200": True,
@@ -48,11 +50,33 @@ FEATURE_CONFIG = {
     "shadow_ratio": True,
     "green_candles_10": True,
     "red_candles_10": True,
-    # کندل پترن‌ها (نمونه، بقیه را هم می‌توانی اضافه کنی)
+    # فیچرهای پیشرفته ورود/خروج
+    "ema_cross_9_21": True,
+    "breakout_30": True,
+    "breakdown_30": True,
+    "green_candle_ratio_20": True,
+    "red_candle_ratio_20": True,
+    "price_ema50_diff": True,
+    "price_ema200_diff": True,
+    "vol_spike": True,
+    "atr_spike": True,
+    "wick_ratio": True,
+    # کندل پترن‌ها
     "engulfing": True,
     "hammer": True,
     "doji": True,
     "morning_star": True,
     "shooting_star": True,
-    # سایر فیچرهای قبلی پروژه اگر خاص بود همینجا اضافه کن
+    # فیچرهای خبری و فاندامنتال
+    "news_sentiment_mean_6h": True,
+    "news_shock_count_6h": True,
+    "news_count": True,
+    "news_sentiment_mean": True,
+    "news_sentiment_std": True,
+    "news_pos_count": True,
+    "news_neg_count": True,
+    "news_latest_sentiment": True,
+    "news_content_len": True,
+    "news_weighted_score": True,
+    # دیگر فیچرهای خبری بر اساس تایم‌فریم (در صورت نیاز اضافه کن)
 }
