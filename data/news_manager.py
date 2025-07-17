@@ -1,24 +1,38 @@
+import pymysql
 import pandas as pd
-from sqlalchemy import create_engine
-from utils.config import DB_CONFIG, NEWS_HOURS
+from utils.config import DB_CONFIG
 
-def get_engine():
-    url = f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
-    return create_engine(url)
-
-def get_latest_news(symbol, hours=NEWS_HOURS):
+def get_latest_news(symbol, hours=800):
+    conn = pymysql.connect(**DB_CONFIG)
     try:
-        engine = get_engine()
-        query = """
-            SELECT * FROM news
-            WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR
-            ORDER BY published_at DESC
-        """
-        df = pd.read_sql(query, engine, params=(symbol, hours))
-        if df.empty and symbol.endswith("USDT"):
-            short_symbol = symbol.replace("USDT", "")
-            df = pd.read_sql(query, engine, params=(short_symbol, hours))
+        query = "SELECT * FROM news WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR ORDER BY published_at DESC"
+        df = pd.read_sql(query, conn, params=[symbol, hours])
+        df = df.sort_values("published_at").reset_index(drop=True)
         return df
-    except Exception as e:
-        print(f"[get_latest_news] Error: {e}")
-        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def save_news_to_db(news):
+    if isinstance(news, pd.DataFrame):
+        news = news.to_dict(orient="records")
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        with conn.cursor() as cursor:
+            for n in news:
+                query = """
+                    INSERT IGNORE INTO news (symbol, published_at, sentiment_score, content, title)
+                    VALUES (%s, %s, %s, %s, %s)
+                """
+                cursor.execute(query, (n["symbol"], n["published_at"], n.get("sentiment_score",0), n.get("content",""), n.get("title","")))
+            conn.commit()
+    finally:
+        conn.close()
+
+def get_news_for_range(symbol, start_ts, end_ts):
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        query = "SELECT * FROM news WHERE symbol=%s AND UNIX_TIMESTAMP(published_at) BETWEEN %s AND %s ORDER BY published_at ASC"
+        df = pd.read_sql(query, conn, params=[symbol, start_ts, end_ts])
+        return df
+    finally:
+        conn.close()
