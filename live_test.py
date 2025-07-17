@@ -6,6 +6,7 @@ from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
 from data.candle_manager import get_latest_candles, save_candles_to_db, keep_last_200_candles
 from data.news_manager import get_latest_news, save_news_to_db, get_news_for_range
+from data.fetch_online import fetch_candles_binance, fetch_news_online  # تو باید fetch_news_online رو بسازی
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
@@ -16,7 +17,7 @@ TP_STEPS = [0.03, 0.05, 0.07]
 TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
 THRESHOLD = 0.7
-CANDLE_LIMIT = 200  # تعداد کندل مورد استفاده و ذخیره
+CANDLE_LIMIT = 200
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
@@ -52,6 +53,20 @@ def auto_feature_selection(symbol, model, all_feature_names):
     monitor = FeatureMonitor(model, all_feature_names)
     monitor.evaluate_features(X)
     return monitor.get_active_feature_names()
+
+def fetch_and_store_candles_and_news(symbol):
+    """داده آنلاین را از اینترنت بگیر و در دیتابیس ذخیره کن"""
+    candles = fetch_candles_binance(symbol, interval="4h", limit=20)
+    if candles:
+        save_candles_to_db(candles)
+        keep_last_200_candles(symbol)
+    # اگر تابع fetch_news_online داری:
+    try:
+        news = fetch_news_online(symbol, limit=20)
+        if news:
+            save_news_to_db(news)
+    except Exception:
+        pass
 
 def save_trades_log():
     if trades_log:
@@ -177,13 +192,20 @@ def tp_sl_watcher():
 def live_test():
     global status_texts, positions, entry_price, sl_price, tp_prices, qty_left, tp_idx, balance, trades_log
 
-    # --- فیچر مانیتور خودکار ---
     model, all_feature_names = load_or_train_model()
     activate_all_features()
+
+    # --- قبل از شروع لایو برای هر symbol داده آنلاین بگیر و ذخیره کن
+    for symbol in LIVE_SYMBOLS:
+        fetch_and_store_candles_and_news(symbol)
+    
+    # --- فیچر مانیتور خودکار هر بار قبل از تحلیل ---
+    feature_names_per_symbol = {}
     for symbol in LIVE_SYMBOLS:
         print(f"Selecting best features for {symbol} ...")
-        auto_feature_selection(symbol, model, all_feature_names)
-        print(f"Active features for {symbol}: {[f for f, v in FEATURE_CONFIG.items() if v]}")
+        feature_names = auto_feature_selection(symbol, model, all_feature_names)
+        feature_names_per_symbol[symbol] = feature_names
+        print(f"Active features for {symbol}: {feature_names}")
     # ----------------------------
 
     print("===== Starting LIVE trading/test =====")
@@ -198,23 +220,16 @@ def live_test():
 
         for symbol in LIVE_SYMBOLS:
             try:
-                # ---- دریافت کندل و ذخیره در دیتابیس ----
+                fetch_and_store_candles_and_news(symbol)  # اینترنت→دیتابیس→مدل
                 candles = get_latest_candles(symbol, CANDLE_LIMIT)
-                save_candles_to_db(candles)
-                keep_last_200_candles(symbol)
                 price_now = latest_prices.get(symbol, 0.0)
-
-                # ---- دریافت اخبار و ذخیره ----
                 news = get_latest_news(symbol, hours=CANDLE_LIMIT*4)
                 save_news_to_db(news)
-                # فقط اخبار مربوط به بازه 200 کندل آخر
                 if not candles.empty:
                     start_ts = candles.iloc[-CANDLE_LIMIT]['timestamp']
                     end_ts = candles.iloc[-1]['timestamp']
                     news = get_news_for_range(symbol, start_ts, end_ts)
                     news = pd.DataFrame(news)
-                # ----------------------------------------
-
                 new_candle = candles.iloc[-1].copy()
                 new_candle['close'] = price_now
                 candle_slice = candles.copy()
@@ -226,7 +241,7 @@ def live_test():
                 elif isinstance(features, pd.Series):
                     features = features.to_dict()
                 X = pd.DataFrame([features])
-                active_features = [f for f, v in FEATURE_CONFIG.items() if v]
+                active_features = feature_names_per_symbol[symbol]
                 X = X[active_features]
                 signal = predict_signals(model, active_features, X)[0]
 
