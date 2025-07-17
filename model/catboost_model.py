@@ -16,7 +16,7 @@ def train_model(X, y):
     counts = Counter(y)
     for cls in counts:
         if cls == "Hold":
-            class_weights[cls] = 1
+            class_weights[cls] = 4
         else:
             class_weights[cls] = 10  # وزن بیشتر به Buy/Sell
 
