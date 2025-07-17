@@ -2,8 +2,10 @@ pandas
 numpy
 catboost
 ta
-talib-binary
+TA_Lib
 requests
 sqlalchemy
 pymysql
 joblib
+transformers 
+torch
