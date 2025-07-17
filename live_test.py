@@ -4,13 +4,15 @@ import threading
 import tkinter as tk
 from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
-from data.candle_manager import get_latest_candles, save_candles_to_db, keep_last_200_candles
-from data.news_manager import get_latest_news, save_news_to_db, get_news_for_range
-from data.fetch_online import fetch_candles_binance, fetch_news_online  # تو باید fetch_news_online رو بسازی
+from data.candle_manager import get_latest_candles, keep_last_200_candles
+from data.news_manager import get_latest_news, get_news_for_range
+from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
-from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
+
+from textblob import TextBlob  # برای تحلیل احساسات اخبار
+import os
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 BALANCE = 100
@@ -20,15 +22,7 @@ SL_PCT = 0.02
 THRESHOLD = 0.7
 CANDLE_LIMIT = 200
 
-NEWSAPI_KEY = "کلید newsapi خودت"  # فراموش نکن جایگزینش کنی
-
-def fetch_and_store_latest_data(symbol):
-    # کندل‌های جدید
-    candles = fetch_candles_binance(symbol, interval="4h", limit=200)
-    save_candles_to_db(candles)
-    # اخبار جدید
-    news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
-    save_news_to_db(news)
+NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "کلید newsapi خودت را اینجا بگذار")
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
@@ -47,7 +41,6 @@ def activate_all_features():
         FEATURE_CONFIG[k] = True
 
 def auto_feature_selection(symbol, model, all_feature_names):
-    """اجرای فیچر مانیتور روی 200 کندل آخر هر ارز، فعال‌سازی top N فیچر مؤثر"""
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
     news = get_latest_news(symbol, hours=CANDLE_LIMIT*4)
     features_list = []
@@ -65,19 +58,27 @@ def auto_feature_selection(symbol, model, all_feature_names):
     monitor.evaluate_features(X)
     return monitor.get_active_feature_names()
 
-def fetch_and_store_candles_and_news(symbol):
-    """داده آنلاین را از اینترنت بگیر و در دیتابیس ذخیره کن"""
-    candles = fetch_candles_binance(symbol, interval="4h", limit=20)
-    if candles:
-        save_candles_to_db(candles)
-        keep_last_200_candles(symbol)
-    # اگر تابع fetch_news_online داری:
+def analyze_sentiment(text):
+    """تحلیل احساسات خبر با TextBlob (نمونه ساده و سریع، می‌توان مدل‌های پیشرفته‌تر هم جایگزین کرد)"""
     try:
-        news = fetch_news_online(symbol, limit=20)
-        if news:
-            save_news_to_db(news)
+        if not text or not isinstance(text, str):
+            return 0
+        tb = TextBlob(text)
+        return round(tb.sentiment.polarity, 3)  # عددی بین -1 و 1
     except Exception:
-        pass
+        return 0
+
+def fetch_and_store_latest_data(symbol):
+    # کندل‌های جدید
+    candles = fetch_candles_binance(symbol, interval="4h", limit=200)
+    save_candles_to_db(candles)
+    keep_last_200_candles(symbol)
+    # اخبار جدید
+    news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
+    for n in news:
+        # تحلیل احساسات واقعی
+        n["sentiment_score"] = analyze_sentiment((n.get("title") or "") + " " + (n.get("content") or ""))
+    save_news_to_db(news)
 
 def save_trades_log():
     if trades_log:
@@ -205,19 +206,18 @@ def live_test():
 
     model, all_feature_names = load_or_train_model()
     activate_all_features()
-
-    # --- قبل از شروع لایو برای هر symbol داده آنلاین بگیر و ذخیره کن
-    for symbol in LIVE_SYMBOLS:
-        fetch_and_store_candles_and_news(symbol)
-    
-    # --- فیچر مانیتور خودکار هر بار قبل از تحلیل ---
     feature_names_per_symbol = {}
+
+    # دریافت و ذخیره دیتا پیش از تحلیل
+    for symbol in LIVE_SYMBOLS:
+        fetch_and_store_latest_data(symbol)
+
+    # اجرای فیچر مانیتور و فعال‌سازی فیچرهای مناسب
     for symbol in LIVE_SYMBOLS:
         print(f"Selecting best features for {symbol} ...")
         feature_names = auto_feature_selection(symbol, model, all_feature_names)
         feature_names_per_symbol[symbol] = feature_names
         print(f"Active features for {symbol}: {feature_names}")
-    # ----------------------------
 
     print("===== Starting LIVE trading/test =====")
     last_main_loop = 0
@@ -231,11 +231,10 @@ def live_test():
 
         for symbol in LIVE_SYMBOLS:
             try:
-                fetch_and_store_candles_and_news(symbol)  # اینترنت→دیتابیس→مدل
+                fetch_and_store_latest_data(symbol)
                 candles = get_latest_candles(symbol, CANDLE_LIMIT)
                 price_now = latest_prices.get(symbol, 0.0)
                 news = get_latest_news(symbol, hours=CANDLE_LIMIT*4)
-                save_news_to_db(news)
                 if not candles.empty:
                     start_ts = candles.iloc[-CANDLE_LIMIT]['timestamp']
                     end_ts = candles.iloc[-1]['timestamp']
