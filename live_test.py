@@ -4,10 +4,11 @@ import threading
 import tkinter as tk
 from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
-from data.candle_manager import get_latest_candles
-from data.news_manager import get_latest_news
+from data.candle_manager import get_latest_candles, save_candles_to_db, keep_last_200_candles
+from data.news_manager import get_latest_news, save_news_to_db, get_news_for_range
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
+from feature_engineering.feature_config import FEATURE_CONFIG
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 BALANCE = 100
@@ -15,14 +16,12 @@ TP_STEPS = [0.03, 0.05, 0.07]
 TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
 THRESHOLD = 0.7
-NEWS_HOURS = 48
-CANDLE_LIMIT = 120
+CANDLE_LIMIT = 200  # تعداد کندل مورد استفاده و ذخیره
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
 latest_prices = {symbol: 0.0 for symbol in LIVE_SYMBOLS}
 
-# این متغیرها باید global باشند تا توسط همه threadها دیده شوند
 positions = {symbol: None for symbol in LIVE_SYMBOLS}
 entry_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
 sl_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
@@ -31,31 +30,27 @@ qty_left = {symbol: 1.0 for symbol in LIVE_SYMBOLS}
 tp_idx = {symbol: 0 for symbol in LIVE_SYMBOLS}
 balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
 
-def run_feature_monitor(model, all_feature_names, symbol):
+def activate_all_features():
+    for k in FEATURE_CONFIG.keys():
+        FEATURE_CONFIG[k] = True
+
+def auto_feature_selection(symbol, model, all_feature_names):
+    """اجرای فیچر مانیتور روی 200 کندل آخر هر ارز، فعال‌سازی top N فیچر مؤثر"""
     candles = get_latest_candles(symbol, CANDLE_LIMIT)
-    news = get_latest_news(symbol, hours=NEWS_HOURS)
+    news = get_latest_news(symbol, hours=CANDLE_LIMIT*4)
     features_list = []
     for i in range(len(candles) - 100, len(candles)):
         candle_slice = candles.iloc[:i + 1]
-        if not news.empty:
-            candle_time = pd.to_datetime(candle_slice.iloc[-1]['timestamp'], unit='s')
-            news_slice = news[news['published_at'] <= candle_time]
-        else:
-            news_slice = pd.DataFrame()
-        features = build_features(candle_slice, news_slice, symbol)
-        if isinstance(features, pd.DataFrame):
-            features = features.iloc[0].to_dict()
-        elif isinstance(features, pd.Series):
-            features = features.to_dict()
-        elif isinstance(features, dict):
-            pass
-        else:
-            print("features type not supported:", type(features))
-            continue
-        features_list.append(features)
+        news_slice = news[news['published_at'] <= pd.to_datetime(candle_slice.iloc[-1]['timestamp'], unit='s')] if not news.empty else pd.DataFrame()
+        feat = build_features(candle_slice, news_slice, symbol)
+        if isinstance(feat, pd.DataFrame):
+            feat = feat.iloc[0].to_dict()
+        elif isinstance(feat, pd.Series):
+            feat = feat.to_dict()
+        features_list.append(feat)
     X = pd.DataFrame(features_list)
     monitor = FeatureMonitor(model, all_feature_names)
-    monitor.evaluate_features(X, y=None)
+    monitor.evaluate_features(X)
     return monitor.get_active_feature_names()
 
 def save_trades_log():
@@ -63,14 +58,12 @@ def save_trades_log():
         pd.DataFrame(trades_log).to_csv("trades.csv", index=False)
 
 def price_updater():
-    """حلقه گرفتن قیمت لحظه‌ای و آپدیت سریع tkinter"""
     global status_texts, latest_prices
     while True:
         for symbol in LIVE_SYMBOLS:
             try:
                 price_now = get_realtime_price(symbol)
                 latest_prices[symbol] = price_now
-                # اگر پوزیشن فعال نیست، فقط قیمت و وضعیت را نشان بده
                 lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
@@ -83,7 +76,7 @@ def price_updater():
                 status_texts[symbol] = '\n'.join(lines)
             except Exception as e:
                 status_texts[symbol] = f"Symbol: {symbol}\nPrice: --\n(Price error: {e})"
-        time.sleep(1)  # هر 1 ثانیه قیمت را آپدیت کن
+        time.sleep(1)
 
 def tp_sl_watcher():
     global status_texts, latest_prices, positions, sl_price, tp_prices, tp_idx, qty_left, entry_price, balance, trades_log
@@ -96,7 +89,6 @@ def tp_sl_watcher():
                         pnl = -BALANCE * qty_left[symbol] * SL_PCT
                         fee = abs(pnl) * 0.001
                         balance[symbol] += pnl - fee
-                        print(f"[{symbol}] SL HIT! CLOSE LONG at {price_now:.2f}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': 'SL',
@@ -117,7 +109,6 @@ def tp_sl_watcher():
                         pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
                         fee = abs(pnl) * 0.001
                         balance[symbol] += pnl - fee
-                        print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE LONG at {price_now:.2f}, qty={tp_qty}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': f'TP{tp_idx[symbol]+1}',
@@ -134,7 +125,6 @@ def tp_sl_watcher():
                         qty_left[symbol] -= tp_qty
                         tp_idx[symbol] += 1
                         if qty_left[symbol] <= 0:
-                            print(f"[{symbol}] ALL TP HIT! FULL CLOSE LONG")
                             positions[symbol] = None
                             qty_left[symbol] = 1.0
                 elif positions[symbol] == "SHORT":
@@ -142,7 +132,6 @@ def tp_sl_watcher():
                         pnl = -BALANCE * qty_left[symbol] * SL_PCT
                         fee = abs(pnl) * 0.001
                         balance[symbol] += pnl - fee
-                        print(f"[{symbol}] SL HIT! CLOSE SHORT at {price_now:.2f}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': 'SL',
@@ -163,7 +152,6 @@ def tp_sl_watcher():
                         pnl = BALANCE * tp_qty * (TP_STEPS[tp_idx[symbol]])
                         fee = abs(pnl) * 0.001
                         balance[symbol] += pnl - fee
-                        print(f"[{symbol}] TP{tp_idx[symbol]+1} HIT! PARTIAL CLOSE SHORT at {price_now:.2f}, qty={tp_qty}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': f'TP{tp_idx[symbol]+1}',
@@ -180,69 +168,69 @@ def tp_sl_watcher():
                         qty_left[symbol] -= tp_qty
                         tp_idx[symbol] += 1
                         if qty_left[symbol] <= 0:
-                            print(f"[{symbol}] ALL TP HIT! FULL CLOSE SHORT")
                             positions[symbol] = None
                             qty_left[symbol] = 1.0
             except Exception as e:
                 print(f"[{symbol}] TP/SL Watcher ERROR: {e}")
-        time.sleep(1)  # هر 1 ثانیه بررسی کن
+        time.sleep(1)
 
 def live_test():
     global status_texts, positions, entry_price, sl_price, tp_prices, qty_left, tp_idx, balance, trades_log
+
+    # --- فیچر مانیتور خودکار ---
     model, all_feature_names = load_or_train_model()
-    symbol_features = {}
+    activate_all_features()
     for symbol in LIVE_SYMBOLS:
-        print(f"Running feature monitor for {symbol} ...")
-        feature_names = run_feature_monitor(model, all_feature_names, symbol)
-        symbol_features[symbol] = feature_names
+        print(f"Selecting best features for {symbol} ...")
+        auto_feature_selection(symbol, model, all_feature_names)
+        print(f"Active features for {symbol}: {[f for f, v in FEATURE_CONFIG.items() if v]}")
+    # ----------------------------
 
     print("===== Starting LIVE trading/test =====")
     last_main_loop = 0
 
     while True:
         now = time.time()
-        if now - last_main_loop < 60:  # هر 1 دقیقه تحلیل انجام شود
+        if now - last_main_loop < 60:
             time.sleep(1)
             continue
         last_main_loop = now
 
         for symbol in LIVE_SYMBOLS:
             try:
-                price_now = latest_prices.get(symbol, 0.0)
+                # ---- دریافت کندل و ذخیره در دیتابیس ----
                 candles = get_latest_candles(symbol, CANDLE_LIMIT)
-                news = get_latest_news(symbol, hours=NEWS_HOURS)
+                save_candles_to_db(candles)
+                keep_last_200_candles(symbol)
+                price_now = latest_prices.get(symbol, 0.0)
+
+                # ---- دریافت اخبار و ذخیره ----
+                news = get_latest_news(symbol, hours=CANDLE_LIMIT*4)
+                save_news_to_db(news)
+                # فقط اخبار مربوط به بازه 200 کندل آخر
+                if not candles.empty:
+                    start_ts = candles.iloc[-CANDLE_LIMIT]['timestamp']
+                    end_ts = candles.iloc[-1]['timestamp']
+                    news = get_news_for_range(symbol, start_ts, end_ts)
+                    news = pd.DataFrame(news)
+                # ----------------------------------------
 
                 new_candle = candles.iloc[-1].copy()
                 new_candle['close'] = price_now
                 candle_slice = candles.copy()
                 candle_slice.iloc[-1] = new_candle
 
-                if not news.empty:
-                    candle_time = pd.to_datetime(new_candle['timestamp'], unit='s')
-                    news_slice = news[news['published_at'] <= candle_time]
-                else:
-                    news_slice = pd.DataFrame()
-
-                features = build_features(candle_slice, news_slice, symbol)
+                features = build_features(candle_slice, news, symbol)
                 if isinstance(features, pd.DataFrame):
                     features = features.iloc[0].to_dict()
                 elif isinstance(features, pd.Series):
                     features = features.to_dict()
-                elif isinstance(features, dict):
-                    pass
-                else:
-                    print("features type not supported:", type(features))
-                    continue
                 X = pd.DataFrame([features])
-                if symbol in symbol_features:
-                    feature_names = symbol_features[symbol]
-                else:
-                    feature_names = X.columns.tolist()
-                signal = predict_signals(model, feature_names, X)[0]
+                active_features = [f for f, v in FEATURE_CONFIG.items() if v]
+                X = X[active_features]
+                signal = predict_signals(model, active_features, X)[0]
 
-                print(f"[{symbol}] Price: {price_now:.2f} | Signal: {signal} | Balance: {balance[symbol]:.2f}")
-
-                # جمع آوری اطلاعات پله ها و وضعیت ها برای هر ارز
+                # نمایش وضعیت
                 status_lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
@@ -259,7 +247,6 @@ def live_test():
                     status_lines.append(f"Position: {positions[symbol]}")
                 else:
                     status_lines.append("No active position")
-                # تاریخچه معاملات مختصر برای هر ارز
                 recent_trades = [trade for trade in trades_log if trade['symbol'] == symbol][-5:]
                 if recent_trades:
                     status_lines.append("Last Trades:")
@@ -276,7 +263,6 @@ def live_test():
                         tp_prices[symbol] = [price_now * (1 + x) for x in TP_STEPS]
                         qty_left[symbol] = 1.0
                         tp_idx[symbol] = 0
-                        print(f"[{symbol}] BUY at {price_now:.2f}, SL={sl_price[symbol]:.2f}, TP={tp_prices[symbol]}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': 'ENTRY',
@@ -293,7 +279,6 @@ def live_test():
                         tp_prices[symbol] = [price_now * (1 - x) for x in TP_STEPS]
                         qty_left[symbol] = 1.0
                         tp_idx[symbol] = 0
-                        print(f"[{symbol}] SELL at {price_now:.2f}, SL={sl_price[symbol]:.2f}, TP={tp_prices[symbol]}")
                         trades_log.append({
                             'symbol': symbol,
                             'type': 'ENTRY',
