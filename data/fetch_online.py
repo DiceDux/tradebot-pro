@@ -1,6 +1,7 @@
 import requests
 from utils.config import DB_CONFIG
 import pymysql
+import datetime
 
 def fetch_candles_binance(symbol, interval="4h", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -24,20 +25,23 @@ def fetch_candles_binance(symbol, interval="4h", limit=100):
         print(f"[fetch_candles_binance] Error: {e}")
         return []
 
-def save_candles_to_db(candles):
+def fetch_news_online(symbol, limit=10):
+    # این تابع باید با API خبری دلخواه پر شود! (نمونه فرضی)
+    url = f"https://api.yournewsprovider.com/crypto_news?symbol={symbol}&limit={limit}"
     try:
-        conn = pymysql.connect(**DB_CONFIG)
-        with conn.cursor() as cursor:
-            for c in candles:
-                query = """
-                    INSERT IGNORE INTO candles (symbol, timestamp, open, high, low, close, volume)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(query, (c["symbol"], c["timestamp"], c["open"], c["high"], c["low"], c["close"], c["volume"]))
-            conn.commit()
-        conn.close()
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()  # فرض بر این که دیتا در قالب لیست است
+        news = []
+        for n in data:
+            news.append({
+                "symbol": symbol,
+                "published_at": n["published_at"],
+                "sentiment_score": n.get("sentiment_score", 0),
+                "content": n.get("content", ""),
+                "title": n.get("title", "")
+            })
+        return news
     except Exception as e:
-        print(f"[save_candles_to_db] Error: {e}")
-
-# candles = fetch_candles_binance("BTCUSDT")
-# save_candles_to_db(candles)
+        print(f"[fetch_news_online] Error: {e}")
+        return []
