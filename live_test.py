@@ -7,11 +7,10 @@ from model.catboost_model import load_or_train_model, predict_signals
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news, get_news_for_range
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
+from feature_engineering.sentiment_finbert import analyze_sentiment_finbert  # ← اینجا FinBERT را ایمپورت کن
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
-
-from textblob import TextBlob  # برای تحلیل احساسات اخبار
 import os
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
@@ -58,26 +57,13 @@ def auto_feature_selection(symbol, model, all_feature_names):
     monitor.evaluate_features(X)
     return monitor.get_active_feature_names()
 
-def analyze_sentiment(text):
-    """تحلیل احساسات خبر با TextBlob (نمونه ساده و سریع، می‌توان مدل‌های پیشرفته‌تر هم جایگزین کرد)"""
-    try:
-        if not text or not isinstance(text, str):
-            return 0
-        tb = TextBlob(text)
-        return round(tb.sentiment.polarity, 3)  # عددی بین -1 و 1
-    except Exception:
-        return 0
-
 def fetch_and_store_latest_data(symbol):
-    # کندل‌های جدید
     candles = fetch_candles_binance(symbol, interval="4h", limit=200)
     save_candles_to_db(candles)
     keep_last_200_candles(symbol)
-    # اخبار جدید
     news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
     for n in news:
-        # تحلیل احساسات واقعی
-        n["sentiment_score"] = analyze_sentiment((n.get("title") or "") + " " + (n.get("content") or ""))
+        n["sentiment_score"] = analyze_sentiment_finbert((n.get("title") or "") + " " + (n.get("content") or ""))
     save_news_to_db(news)
 
 def save_trades_log():
