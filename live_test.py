@@ -10,6 +10,7 @@ from data.fetch_online import fetch_candles_binance, fetch_news_online  # تو �
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
+from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 BALANCE = 100
@@ -18,6 +19,16 @@ TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
 THRESHOLD = 0.7
 CANDLE_LIMIT = 200
+
+NEWSAPI_KEY = "کلید newsapi خودت"  # فراموش نکن جایگزینش کنی
+
+def fetch_and_store_latest_data(symbol):
+    # کندل‌های جدید
+    candles = fetch_candles_binance(symbol, interval="4h", limit=200)
+    save_candles_to_db(candles)
+    # اخبار جدید
+    news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
+    save_news_to_db(news)
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
