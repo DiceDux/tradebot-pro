@@ -22,7 +22,7 @@ SL_PCT = 0.02
 THRESHOLD = 0.7
 CANDLE_LIMIT = 200
 
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "کلید newsapi خودت را اینجا بگذار")
+NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
 
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
