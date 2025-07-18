@@ -10,8 +10,15 @@ from model.catboost_model import FEATURES_PATH
 import joblib
 import os
 
-def make_label(candles, news_df=None, threshold=0.015, future_steps=12, past_steps=30):
-    # threshold را کمتر کردم (از 0.03 به 0.015)
+def make_label(candles, news_df=None, threshold=0.008, future_steps=12, past_steps=30):
+    """
+    فعال‌ترین و فرصت‌طلب‌ترین منطق برچسب‌گذاری:
+    - آستانه‌های خیلی پایین برای breakout و shock خبری
+    - شرط‌های ساده و جسورانه: فقط یکی کافی باشد
+    - حذف شرط‌های ترکیبی سخت
+    - شرط کوتاه‌مدت روند اضافه شده
+    - انتخاب buy/sell اگر هر دو برقرار بود، با فاصله بیشتر از high/low
+    """
     closes = candles['close'].values
     highs = candles['high'].values
     lows = candles['low'].values
@@ -41,31 +48,36 @@ def make_label(candles, news_df=None, threshold=0.015, future_steps=12, past_ste
             shock_news = news_df[(news_df['ts'] <= t0) & (news_df['ts'] > t0 - 3600*6)]
             if not shock_news.empty and 'sentiment_score' in shock_news:
                 shock = shock_news['sentiment_score'].astype(float).mean()
-            shock_count = len(shock_news[(shock_news['sentiment_score'] > 0.2) | (shock_news['sentiment_score'] < -0.2)])  # شوک راحت‌تر
+            shock_count = len(shock_news[(shock_news['sentiment_score'] > 0.1) | (shock_news['sentiment_score'] < -0.1)])
 
-        # پرایس اکشن و کراس‌ها
-        breakout_buy = (current > past_high * 1.0007)  # راحت‌تر از قبل
-        breakout_sell = (current < past_low * 0.9993)
+        # شرط‌های پرایس اکشن و روند
+        breakout_buy = (current > past_high * 1.0003)
+        breakout_sell = (current < past_low * 0.9997)
         ema_cross_buy = (prev_ema9 < prev_ema21) and (ema9 > ema21)
         ema_cross_sell = (prev_ema9 > prev_ema21) and (ema9 < ema21)
-        vol_spike = vol > mean_vol * 1.2  # راحت‌تر از قبل
-        atr_spike = atr > prev_atr * 1.2 if prev_atr > 0 else False
-        news_buy = (shock > 0.2 and shock_count >= 1)
-        news_sell = (shock < -0.2 and shock_count >= 1)
+        vol_spike = vol > mean_vol * 1.1
+        atr_spike = atr > prev_atr * 1.1 if prev_atr > 0 else False
+        news_buy = (shock > 0.1 and shock_count >= 1)
+        news_sell = (shock < -0.1 and shock_count >= 1)
+        short_trend_buy = (current > closes[i-3:i].mean() * 1.001)
+        short_trend_sell = (current < closes[i-3:i].mean() * 0.999)
 
-        # ترکیب شرط‌ها
-        buy_cond = (breakout_buy or ema_cross_buy or news_buy or vol_spike or atr_spike)
-        sell_cond = (breakout_sell or ema_cross_sell or news_sell or vol_spike or atr_spike)
+        # فرصت‌طلبی: کافیست یکی از شرط‌ها برقرار باشد!
+        buy_cond = (breakout_buy or ema_cross_buy or news_buy or vol_spike or atr_spike or short_trend_buy)
+        sell_cond = (breakout_sell or ema_cross_sell or news_sell or vol_spike or atr_spike or short_trend_sell)
 
-        # به شرط‌های بالا، شرط روند کوتاه مدت هم اضافه کن:
-        short_trend_buy = (current > closes[i-3:i].mean() * 1.003)  # یعنی 3 کندل قبلی صعودی
-        short_trend_sell = (current < closes[i-3:i].mean() * 0.997)
-        if buy_cond or short_trend_buy:
-            labels.append(2)  # Buy
-        elif sell_cond or short_trend_sell:
-            labels.append(0)  # Sell
+        # اگر هر دو برقرار بود، آنی را انتخاب کن که فاصله بیشتری دارد
+        if buy_cond and not sell_cond:
+            labels.append(2)
+        elif sell_cond and not buy_cond:
+            labels.append(0)
+        elif buy_cond and sell_cond:
+            if abs(current-past_high) > abs(current-past_low):
+                labels.append(2)
+            else:
+                labels.append(0)
         else:
-            labels.append(1)  # Hold
+            labels.append(1)
 
     candles = candles.iloc[past_steps:-(future_steps)].copy()
     candles['label'] = labels
@@ -81,7 +93,7 @@ for symbol in SYMBOLS:
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
-    # ساخت لیبل‌ها با منطق فعال‌تر و فرصت‌طلب‌تر
+    # منطق فعال‌تر و فرصت‌طلب‌تر
     candles = make_label(candles, news)
     print(f"Label distribution for {symbol}\n{candles['label'].value_counts()}")
 
