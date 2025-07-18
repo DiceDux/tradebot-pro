@@ -114,7 +114,7 @@ def build_features(candles_df, news_df, symbol):
         volume = candles_df['volume']
 
         # EMA ها
-        for ema_span in [5, 10, 20, 50, 100, 200]:
+        for ema_span in [5, 9, 10, 20, 21, 50, 100, 200]:
             k = f'ema{ema_span}'
             if FEATURE_CONFIG.get(k):
                 features[k] = safe_ema(close, ema_span)
@@ -233,9 +233,8 @@ def build_features(candles_df, news_df, symbol):
             if FEATURE_CONFIG.get(k):
                 features[k] = candles_df[k].values[-1]
 
-        # ==== اندیکاتورهای مدرن و پرایس اکشن (با ta) ====
+        # ====== اندیکاتورهای مدرن و پرایس اکشن (با ta) ======
         if ta is not None:
-            # توجه: باید window+1 کندل بدهیم و مقدار واقعی آرایه را چک کنیم و خطا را بگیریم
             adx_window = 14
             adx_min = adx_window + 1
             if FEATURE_CONFIG.get('adx14'):
@@ -323,6 +322,74 @@ def build_features(candles_df, news_df, symbol):
                     features['williams_vix_fix'] = (high[-22:].max() - close.values[-1]) / (high[-22:].max() + 1e-8)
                 else:
                     features['williams_vix_fix'] = 0.0
+
+        # ===== فیچرهای خاص برای نقاط ورود/خروج =====
+
+        # کراس EMA9/EMA21
+        if FEATURE_CONFIG.get('ema_cross_9_21'):
+            if len(close) >= 22:
+                ema9 = close.ewm(span=9).mean().values
+                ema21 = close.ewm(span=21).mean().values
+                cross = (ema9[-2] < ema21[-2] and ema9[-1] > ema21[-1]) or (ema9[-2] > ema21[-2] and ema9[-1] < ema21[-1])
+                features['ema_cross_9_21'] = float(cross)
+            else:
+                features['ema_cross_9_21'] = 0.0
+
+        # breakout/breakdown در 30 کندل اخیر
+        if FEATURE_CONFIG.get('breakout_30'):
+            features['breakout_30'] = float(close.values[-1] > high[-30:].max() * 1.001) if len(close) >= 30 else 0.0
+        if FEATURE_CONFIG.get('breakdown_30'):
+            features['breakdown_30'] = float(close.values[-1] < low[-30:].min() * 0.999) if len(close) >= 30 else 0.0
+
+        # درصد کندل‌های سبز/قرمز در 20 کندل آخر
+        if FEATURE_CONFIG.get('green_candle_ratio_20'):
+            greens = (close[-20:] > open_[-20:]).sum() if len(close)>=20 else 0
+            features['green_candle_ratio_20'] = greens / 20 if len(close)>=20 else 0
+        if FEATURE_CONFIG.get('red_candle_ratio_20'):
+            reds = (close[-20:] < open_[-20:]).sum() if len(close)>=20 else 0
+            features['red_candle_ratio_20'] = reds / 20 if len(close)>=20 else 0
+
+        # اختلاف قیمت فعلی با EMA50 و EMA200
+        if FEATURE_CONFIG.get('price_ema50_diff'):
+            features['price_ema50_diff'] = close.values[-1] - safe_ema(close, 50)
+        if FEATURE_CONFIG.get('price_ema200_diff'):
+            features['price_ema200_diff'] = close.values[-1] - safe_ema(close, 200)
+
+        # حجم spike حرفه‌ای
+        if FEATURE_CONFIG.get('vol_spike'):
+            if len(volume) >= 20:
+                features['vol_spike'] = float(volume.values[-1] > volume[-20:].mean() * 1.5)
+            else:
+                features['vol_spike'] = 0.0
+
+        # ATR spike
+        if FEATURE_CONFIG.get('atr_spike'):
+            if len(high) >= 15 and len(low) >= 15 and len(close) >= 15:
+                tr = pd.concat([
+                    high[-15:] - low[-15:],
+                    (high[-15:] - close[-15:].shift()).abs(),
+                    (low[-15:] - close[-15:].shift()).abs()
+                ], axis=1).max(axis=1)
+                atr = tr.rolling(14).mean().values[-1]
+                prev_tr = pd.concat([
+                    high[-16:-1] - low[-16:-1],
+                    (high[-16:-1] - close[-16:-1].shift()).abs(),
+                    (low[-16:-1] - close[-16:-1].shift()).abs()
+                ], axis=1).max(axis=1)
+                prev_atr = prev_tr.rolling(14).mean().values[-1]
+                features['atr_spike'] = float(atr > prev_atr * 1.5) if prev_atr > 0 else 0.0
+            else:
+                features['atr_spike'] = 0.0
+
+        # wick ratio
+        if FEATURE_CONFIG.get('wick_ratio'):
+            if len(close) >= 1:
+                body = abs(close.values[-1] - open_.values[-1])
+                high_wick = high.values[-1] - max(close.values[-1], open_.values[-1])
+                low_wick = min(close.values[-1], open_.values[-1]) - low.values[-1]
+                features['wick_ratio'] = (high_wick + low_wick) / (body + 1e-8)
+            else:
+                features['wick_ratio'] = 0.0
 
         # ==== کندل پترن‌ها (talib) ====
         if talib is not None:
