@@ -36,7 +36,7 @@ def make_label(candles, news_df=None, threshold=0.03, future_steps=12, past_step
             t0 = candles.iloc[i]['timestamp']
             news_df = news_df.copy()
             if 'ts' not in news_df.columns and 'published_at' in news_df.columns:
-                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype('int64') // 10**9
             shock_news = news_df[(news_df['ts'] <= t0) & (news_df['ts'] > t0 - 3600*6)]
             if not shock_news.empty and 'sentiment_score' in shock_news:
                 shock = shock_news['sentiment_score'].astype(float).mean()
