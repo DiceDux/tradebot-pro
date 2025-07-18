@@ -12,12 +12,10 @@ import os
 
 def make_label(candles, news_df=None, threshold=0.008, future_steps=12, past_steps=30):
     """
-    فعال‌ترین و فرصت‌طلب‌ترین منطق برچسب‌گذاری:
-    - آستانه‌های خیلی پایین برای breakout و shock خبری
-    - شرط‌های ساده و جسورانه: فقط یکی کافی باشد
-    - حذف شرط‌های ترکیبی سخت
-    - شرط کوتاه‌مدت روند اضافه شده
-    - انتخاب buy/sell اگر هر دو برقرار بود، با فاصله بیشتر از high/low
+    فرصت‌طلب و فعال، اما Hold منطقی‌تر شد.
+    - شرط‌های خرید/فروش جسورانه (آستانه‌های پایین)
+    - Hold وقتی هیچ روند خاصی نباشد یا بازار رنج باشد (بدون breakout، بدون کراس، بدون spike، بدون شوک)
+    - اگر همزمان buy و sell برقرار بود، فاصله از high/low ملاک است
     """
     closes = candles['close'].values
     highs = candles['high'].values
@@ -50,7 +48,6 @@ def make_label(candles, news_df=None, threshold=0.008, future_steps=12, past_ste
                 shock = shock_news['sentiment_score'].astype(float).mean()
             shock_count = len(shock_news[(shock_news['sentiment_score'] > 0.1) | (shock_news['sentiment_score'] < -0.1)])
 
-        # شرط‌های پرایس اکشن و روند
         breakout_buy = (current > past_high * 1.0003)
         breakout_sell = (current < past_low * 0.9997)
         ema_cross_buy = (prev_ema9 < prev_ema21) and (ema9 > ema21)
@@ -62,16 +59,16 @@ def make_label(candles, news_df=None, threshold=0.008, future_steps=12, past_ste
         short_trend_buy = (current > closes[i-3:i].mean() * 1.001)
         short_trend_sell = (current < closes[i-3:i].mean() * 0.999)
 
-        # فرصت‌طلبی: کافیست یکی از شرط‌ها برقرار باشد!
         buy_cond = (breakout_buy or ema_cross_buy or news_buy or vol_spike or atr_spike or short_trend_buy)
         sell_cond = (breakout_sell or ema_cross_sell or news_sell or vol_spike or atr_spike or short_trend_sell)
 
-        # اگر هر دو برقرار بود، آنی را انتخاب کن که فاصله بیشتری دارد
+        # فقط اگر هیچکدام برقرار نبود Hold بده
         if buy_cond and not sell_cond:
             labels.append(2)
         elif sell_cond and not buy_cond:
             labels.append(0)
         elif buy_cond and sell_cond:
+            # فرصت‌طلب‌تر: فاصله از high/low
             if abs(current-past_high) > abs(current-past_low):
                 labels.append(2)
             else:
@@ -93,7 +90,6 @@ for symbol in SYMBOLS:
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
-    # منطق فعال‌تر و فرصت‌طلب‌تر
     candles = make_label(candles, news)
     print(f"Label distribution for {symbol}\n{candles['label'].value_counts()}")
 
