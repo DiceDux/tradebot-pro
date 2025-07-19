@@ -6,8 +6,12 @@ from data.fetch_online import fetch_candles_binance
 def get_latest_candles(symbol, limit=200):
     conn = pymysql.connect(**DB_CONFIG)
     try:
-        query = "SELECT * FROM candles WHERE symbol=%s ORDER BY timestamp DESC LIMIT %s"
-        df = pd.read_sql(query, conn, params=[symbol, limit])
+        if limit is None:
+            query = "SELECT * FROM candles WHERE symbol=%s ORDER BY timestamp DESC"
+            df = pd.read_sql(query, conn, params=[symbol])
+        else:
+            query = "SELECT * FROM candles WHERE symbol=%s ORDER BY timestamp DESC LIMIT %s"
+            df = pd.read_sql(query, conn, params=[symbol, limit])
         df = df.sort_values("timestamp").reset_index(drop=True)
         return df
     finally:
