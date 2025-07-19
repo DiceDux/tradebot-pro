@@ -11,13 +11,20 @@ DYNAMIC_FEATURES_PATH = "model/catboost_active_features.pkl"
 def train_model(X, y, model_path=MODEL_PATH, features_path=FEATURES_PATH):
     from collections import Counter
 
+    # اگر y فقط یک کلاس دارد، آموزش مدل معنی ندارد!
+    unique_classes = set(y)
+    if len(unique_classes) < 2:
+        print(f"[CatBoost][Error] Cannot train: Target contains only one unique value ({list(unique_classes)})")
+        return None
+
+    # وزن‌دهی کلاس‌ها
     class_weights = {}
     counts = Counter(y)
-    # اگر کلاس‌بندی شما عددی است (0, 1, 2)، وزن‌ها را برای هر کلاس تعیین کن
     for cls in counts:
+        # اگر کلاس‌بندی شما عددی است (0, 1, 2)، وزن‌ها را برای هر کلاس تعیین کن
         class_weights[cls] = 1
 
-    # رفع خطا: loss_function را به MultiClass تغییر بده
+    # مدل چندکلاسه با وزن کلاس‌ها
     model = CatBoostClassifier(
         iterations=300,
         verbose=0,
@@ -35,6 +42,11 @@ def retrain_active_model(X, y, active_features):
     # آموزش مجدد مدل فقط با فیچرهای فعال
     X_active = X[active_features]
     print(f"Retraining model with features: {active_features}")
+    # قبل از ریترین، چک کن چند کلاس داری
+    unique_classes = set(y)
+    if len(unique_classes) < 2:
+        print(f"[CatBoost][Error] Cannot retrain: Target contains only one unique value ({list(unique_classes)})")
+        return None
     model = train_model(X_active, y, model_path=DYNAMIC_MODEL_PATH, features_path=DYNAMIC_FEATURES_PATH)
     return model
 
@@ -59,7 +71,12 @@ def predict_signals(model, feature_names, features_df):
     try:
         y_pred = model.predict(features_df)[0]
         proba = model.predict_proba(features_df)[0]
-        signal = ["Sell", "Hold", "Buy"][int(y_pred)]
+        # اگر کلاس‌ها عددی باشند
+        if isinstance(y_pred, (int, np.integer)):
+            signal_map = {0: "Sell", 1: "Hold", 2: "Buy"}
+            signal = signal_map.get(int(y_pred), "Hold")
+        else:
+            signal = ["Sell", "Hold", "Buy"][int(y_pred)]
         analysis = {
             "signal": signal,
             "confidence": float(np.max(proba)),
@@ -68,4 +85,9 @@ def predict_signals(model, feature_names, features_df):
         }
         return signal, analysis
     except Exception as e:
-        return "Hold", {"signal": "Hold", "confidence": 0.0, "features": features_df.to_dict(orient='records')[0], "error": str(e)}
+        return "Hold", {
+            "signal": "Hold",
+            "confidence": 0.0,
+            "features": features_df.to_dict(orient='records')[0],
+            "error": str(e)
+        }
