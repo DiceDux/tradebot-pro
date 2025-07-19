@@ -56,7 +56,6 @@ def auto_feature_selection(symbol, model, all_feature_names):
     X = pd.DataFrame(features_list)
     monitor = FeatureMonitor(model, all_feature_names)
     monitor.evaluate_features(X)
-    # ری‌لود فایل config تا تغییرات جدید اعمال شود
     importlib.reload(importlib.import_module("feature_engineering.feature_config"))
     from feature_engineering.feature_config import FEATURE_CONFIG
     return [f for f, v in FEATURE_CONFIG.items() if v]
@@ -88,7 +87,18 @@ def price_updater():
                 if status_texts[symbol]:
                     old_lines = status_texts[symbol].split('\n')
                     for old_line in old_lines:
-                        if old_line.startswith("Signal:") or old_line.startswith("Balance:") or old_line.startswith("Entry:") or old_line.startswith("SL:") or old_line.startswith("TP") or old_line.sta[...]
+                        # فقط خطوط وضعیت مرتبط را اضافه کن
+                        if (
+                            old_line.startswith("Signal:") or
+                            old_line.startswith("Balance:") or
+                            old_line.startswith("Entry:") or
+                            old_line.startswith("SL:") or
+                            old_line.startswith("TP") or
+                            old_line.startswith("TP idx") or
+                            old_line.startswith("QTY left") or
+                            old_line.startswith("Position") or
+                            old_line.startswith("No active position")
+                        ):
                             lines.append(old_line)
                 status_texts[symbol] = '\n'.join(lines)
             except Exception as e:
@@ -262,11 +272,17 @@ def live_test():
                     status_lines.append(f"Position: {positions[symbol]}")
                 else:
                     status_lines.append("No active position")
+                # آخرین معاملات را نمایش بده
                 recent_trades = [trade for trade in trades_log if trade['symbol'] == symbol][-5:]
                 if recent_trades:
                     status_lines.append("Last Trades:")
                     for t in recent_trades:
-                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | Q[...]
+                        entry_val = t.get('entry_price', t.get('price', 0))
+                        exit_val = t.get('exit_price', '-')
+                        qty_val = t.get('qty', '-')
+                        status_lines.append(
+                            f" {t['type']} | {t.get('side','')} | Entry: {entry_val:.2f} | Exit: {exit_val if isinstance(exit_val, float) else exit_val} | QTY: {qty_val}"
+                        )
 
                 status_texts[symbol] = '\n'.join(status_lines)
 
