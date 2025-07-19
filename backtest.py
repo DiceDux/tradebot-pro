@@ -5,6 +5,9 @@ from data.candle_manager import get_latest_candles
 from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
 from model.catboost_model import load_or_train_model, predict_signals
+from feature_engineering.feature_monitor import FeatureMonitor
+from feature_engineering.feature_config import FEATURE_CONFIG
+import importlib
 
 TP_STEPS = [0.03, 0.05, 0.07]   # پله‌های سود (3٪، 5٪، 7٪)
 TP_QTYS = [0.3, 0.3, 0.4]       # نسبت حجم فروش هر پله
@@ -28,6 +31,28 @@ def backtest(symbol, initial_balance=100):
 
     if not news.empty:
         news['published_at'] = pd.to_datetime(news['published_at'])
+
+    # ========== مانیتور فیچر با 200 کندل اول ==========
+    candles_for_monitor = candles.iloc[:200]
+    news_for_monitor = news[news['published_at'] <= candles_for_monitor.iloc[-1]['timestamp']]
+    X_monitor = []
+    for i in range(len(candles_for_monitor) - 100, len(candles_for_monitor)):
+        candle_slice = candles_for_monitor.iloc[:i + 1]
+        news_slice = news_for_monitor[news_for_monitor['published_at'] <= candle_slice.iloc[-1]['timestamp']] if not news_for_monitor.empty else pd.DataFrame()
+        feat = build_features(candle_slice, news_slice, symbol)
+        if isinstance(feat, pd.DataFrame):
+            feat = feat.iloc[0].to_dict()
+        elif isinstance(feat, pd.Series):
+            feat = feat.to_dict()
+        X_monitor.append(feat)
+    X_monitor_df = pd.DataFrame(X_monitor)
+    monitor = FeatureMonitor(model, feature_names)
+    monitor.evaluate_features(X_monitor_df)
+    # ری‌لود فایل config تا تغییرات جدید اعمال شود
+    importlib.reload(importlib.import_module("feature_engineering.feature_config"))
+    from feature_engineering.feature_config import FEATURE_CONFIG
+    active_features = [f for f, v in FEATURE_CONFIG.items() if v]
+    print(f"Active features for {symbol} (backtest): {active_features}")
 
     fund_features = [
         'news_count_24h',
@@ -58,15 +83,17 @@ def backtest(symbol, initial_balance=100):
         news_slice = news[news['published_at'] <= candle_time] if not news.empty else pd.DataFrame()
         features = build_features(candle_slice, news_slice, symbol)
 
-        # تضمین DataFrame بودن یک ردیفی و سازگار با مدل
+        # فقط فیچرهای فعال را استفاده کن
         if isinstance(features, dict):
-            features_df = pd.DataFrame([features])
+            filtered_features = {f: features.get(f, 0.0) for f in active_features}
+            features_df = pd.DataFrame([filtered_features])
         elif isinstance(features, pd.Series):
-            features_df = features.to_frame().T
+            filtered_features = {f: features.get(f, 0.0) for f in active_features}
+            features_df = pd.DataFrame([filtered_features])
         else:
-            features_df = features.copy()
+            features_df = features[active_features].copy()
 
-        signal, analysis = predict_signals(model, feature_names, features_df)
+        signal, analysis = predict_signals(model, active_features, features_df)
         confidence = analysis.get("confidence", 0.0)
 
         # اگر سیگنال اطمینان کافی نداشت، Hold کن
