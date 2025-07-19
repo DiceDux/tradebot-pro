@@ -3,7 +3,7 @@ import pandas as pd
 import threading
 import tkinter as tk
 from feature_engineering.feature_engineer import build_features
-from model.catboost_model import load_or_train_model, retrain_active_model, load_dynamic_model, predict_signals
+from model.catboost_model import load_or_train_model, retrain_active_model, predict_signals
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news, get_news_for_range
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
@@ -222,9 +222,8 @@ def live_test():
         feature_names_per_symbol[symbol] = active_features
         print(f"Active features for {symbol}: {active_features}")
 
-        # آموزش مجدد مدل فقط با فیچرهای فعال
-        candles_train = get_latest_candles(symbol, limit=3000)
-        news_train = get_latest_news(symbol, hours=365*24)
+        candles_train = get_latest_candles(symbol, limit=None)  # همه کندل‌ها
+        news_train = get_latest_news(symbol, hours=None)        # همه اخبار
         if not news_train.empty:
             news_train['published_at'] = pd.to_datetime(news_train['published_at'])
         X_full = []
@@ -239,7 +238,7 @@ def live_test():
             elif isinstance(features, pd.Series):
                 features = features.to_dict()
             X_full.append({f: features.get(f, 0.0) for f in active_features})
-            y_full.append(candles_train.iloc[i].get("label", 1))  # یا مقدار مناسب برای کلاس باشد
+            y_full.append(candles_train.iloc[i].get("label", 1))
         X_full_df = pd.DataFrame(X_full)
         y_full_arr = np.array(y_full)
         model_active = retrain_active_model(X_full_df, y_full_arr, active_features)
