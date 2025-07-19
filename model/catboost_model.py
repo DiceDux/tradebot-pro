@@ -9,18 +9,21 @@ DYNAMIC_MODEL_PATH = "model/catboost_tradebot_pro_active.pkl"
 DYNAMIC_FEATURES_PATH = "model/catboost_active_features.pkl"
 
 def train_model(X, y, model_path=MODEL_PATH, features_path=FEATURES_PATH):
-    from catboost import CatBoostClassifier
     from collections import Counter
 
     class_weights = {}
     counts = Counter(y)
+    # اگر کلاس‌بندی شما عددی است (0, 1, 2)، وزن‌ها را برای هر کلاس تعیین کن
     for cls in counts:
-        if cls == "Hold":
-            class_weights[cls] = 4
-        else:
-            class_weights[cls] = 10
+        class_weights[cls] = 1
 
-    model = CatBoostClassifier(iterations=300, verbose=0, class_weights=[class_weights.get(c,1) for c in sorted(class_weights)])
+    # رفع خطا: loss_function را به MultiClass تغییر بده
+    model = CatBoostClassifier(
+        iterations=300,
+        verbose=0,
+        loss_function="MultiClass",
+        class_weights=[class_weights.get(c,1) for c in sorted(class_weights)]
+    )
     model.fit(X, y)
     joblib.dump(model, model_path)
     joblib.dump(list(X.columns), features_path)
