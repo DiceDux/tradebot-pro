@@ -7,7 +7,7 @@ from model.catboost_model import load_or_train_model, predict_signals
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news, get_news_for_range
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
-from feature_engineering.sentiment_finbert import analyze_sentiment_finbert  # ← اینجا FinBERT را ایمپورت کن
+from feature_engineering.sentiment_finbert import analyze_sentiment_finbert
 from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
@@ -64,10 +64,12 @@ def fetch_and_store_latest_data(symbol):
     candles = fetch_candles_binance(symbol, interval="4h", limit=200)
     save_candles_to_db(candles)
     keep_last_200_candles(symbol)
+    print(f"[{symbol}] Saved {len(candles)} candles to DB.")
     news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
     for n in news:
         n["sentiment_score"] = analyze_sentiment_finbert((n.get("title") or "") + " " + (n.get("content") or ""))
     save_news_to_db(news)
+    print(f"[{symbol}] Saved {len(news)} news to DB.")
 
 def save_trades_log():
     if trades_log:
@@ -87,7 +89,6 @@ def price_updater():
                 if status_texts[symbol]:
                     old_lines = status_texts[symbol].split('\n')
                     for old_line in old_lines:
-                        # فقط خطوط وضعیت مرتبط را اضافه کن
                         if (
                             old_line.startswith("Signal:") or
                             old_line.startswith("Balance:") or
