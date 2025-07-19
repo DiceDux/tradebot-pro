@@ -3,7 +3,7 @@ import pandas as pd
 import threading
 import tkinter as tk
 from feature_engineering.feature_engineer import build_features
-from model.catboost_model import load_or_train_model, predict_signals
+from model.catboost_model import load_or_train_model, retrain_active_model, load_dynamic_model, predict_signals
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news, get_news_for_range
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
@@ -13,6 +13,7 @@ from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
 import os
 import importlib
+import numpy as np
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 BALANCE = 100
@@ -208,17 +209,41 @@ def live_test():
     model, all_feature_names = load_or_train_model()
     activate_all_features()
     feature_names_per_symbol = {}
+    model_per_symbol = {}
 
     # دریافت و ذخیره دیتا پیش از تحلیل
     for symbol in LIVE_SYMBOLS:
         fetch_and_store_latest_data(symbol)
 
-    # اجرای فیچر مانیتور و فعال‌سازی فیچرهای مناسب
+    # اجرای فیچر مانیتور و فعال‌سازی فیچرهای مناسب و ریترین مدل
     for symbol in LIVE_SYMBOLS:
         print(f"Selecting best features for {symbol} ...")
-        feature_names = auto_feature_selection(symbol, model, all_feature_names)
-        feature_names_per_symbol[symbol] = feature_names
-        print(f"Active features for {symbol}: {feature_names}")
+        active_features = auto_feature_selection(symbol, model, all_feature_names)
+        feature_names_per_symbol[symbol] = active_features
+        print(f"Active features for {symbol}: {active_features}")
+
+        # آموزش مجدد مدل فقط با فیچرهای فعال
+        candles_train = get_latest_candles(symbol, limit=3000)
+        news_train = get_latest_news(symbol, hours=365*24)
+        if not news_train.empty:
+            news_train['published_at'] = pd.to_datetime(news_train['published_at'])
+        X_full = []
+        y_full = []
+        for i in range(100, len(candles_train)-1):
+            candle_slice = candles_train.iloc[i-99:i+1]
+            candle_time = pd.to_datetime(candles_train.iloc[i]['timestamp'], unit='s')
+            news_slice = news_train[news_train['published_at'] <= candle_time] if not news_train.empty else pd.DataFrame()
+            features = build_features(candle_slice, news_slice, symbol)
+            if isinstance(features, pd.DataFrame):
+                features = features.iloc[0].to_dict()
+            elif isinstance(features, pd.Series):
+                features = features.to_dict()
+            X_full.append({f: features.get(f, 0.0) for f in active_features})
+            y_full.append(candles_train.iloc[i].get("label", 1))  # یا مقدار مناسب برای کلاس باشد
+        X_full_df = pd.DataFrame(X_full)
+        y_full_arr = np.array(y_full)
+        model_active = retrain_active_model(X_full_df, y_full_arr, active_features)
+        model_per_symbol[symbol] = model_active
 
     print("===== Starting LIVE trading/test =====")
     last_main_loop = 0
@@ -252,11 +277,11 @@ def live_test():
                 elif isinstance(features, pd.Series):
                     features = features.to_dict()
                 active_features = feature_names_per_symbol[symbol]
-                filtered_features = {f: features.get(f, 0.0) for f in active_features}
-                X = pd.DataFrame([filtered_features])
-                signal = predict_signals(model, active_features, X)[0]
+                row = {f: features.get(f, 0.0) for f in active_features}
+                X = pd.DataFrame([row])
+                model_active = model_per_symbol[symbol]
+                signal = predict_signals(model_active, active_features, X)[0]
 
-                # نمایش وضعیت
                 status_lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
@@ -273,7 +298,6 @@ def live_test():
                     status_lines.append(f"Position: {positions[symbol]}")
                 else:
                     status_lines.append("No active position")
-                # آخرین معاملات را نمایش بده
                 recent_trades = [trade for trade in trades_log if trade['symbol'] == symbol][-5:]
                 if recent_trades:
                     status_lines.append("Last Trades:")
