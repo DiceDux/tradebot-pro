@@ -85,8 +85,8 @@ all_labels = []
 all_cols = set()
 
 for symbol in SYMBOLS:
-    candles = get_latest_candles(symbol, limit=3000)
-    news = get_latest_news(symbol, hours=365*24)
+    candles = get_latest_candles(symbol, limit=None)  # همه کندل‌ها بدون محدودیت
+    news = get_latest_news(symbol, hours=None)        # همه اخبار بدون محدودیت
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
