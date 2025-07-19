@@ -5,27 +5,34 @@ import numpy as np
 
 MODEL_PATH = "model/catboost_tradebot_pro.pkl"
 FEATURES_PATH = "model/catboost_features.pkl"
+DYNAMIC_MODEL_PATH = "model/catboost_tradebot_pro_active.pkl"
+DYNAMIC_FEATURES_PATH = "model/catboost_active_features.pkl"
 
-def train_model(X, y):
+def train_model(X, y, model_path=MODEL_PATH, features_path=FEATURES_PATH):
     from catboost import CatBoostClassifier
     from collections import Counter
-    import numpy as np
 
-    # وزن‌دهی: کلاس هولد وزن 1، کلاس خرید و فروش وزن 10 (یا هر ضریب دلخواه)
     class_weights = {}
     counts = Counter(y)
     for cls in counts:
         if cls == "Hold":
             class_weights[cls] = 4
         else:
-            class_weights[cls] = 10  # وزن بیشتر به Buy/Sell
+            class_weights[cls] = 10
 
     model = CatBoostClassifier(iterations=300, verbose=0, class_weights=[class_weights.get(c,1) for c in sorted(class_weights)])
     model.fit(X, y)
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(list(X.columns), FEATURES_PATH)
-    print(f"Model trained and saved to {MODEL_PATH}")
-    print(f"Feature columns saved to {FEATURES_PATH}")
+    joblib.dump(model, model_path)
+    joblib.dump(list(X.columns), features_path)
+    print(f"Model trained and saved to {model_path}")
+    print(f"Feature columns saved to {features_path}")
+    return model
+
+def retrain_active_model(X, y, active_features):
+    # آموزش مجدد مدل فقط با فیچرهای فعال
+    X_active = X[active_features]
+    print(f"Retraining model with features: {active_features}")
+    model = train_model(X_active, y, model_path=DYNAMIC_MODEL_PATH, features_path=DYNAMIC_FEATURES_PATH)
     return model
 
 def load_or_train_model():
@@ -36,8 +43,15 @@ def load_or_train_model():
     else:
         raise FileNotFoundError("Trained model or feature columns not found. Run train_model.py first.")
 
+def load_dynamic_model():
+    if os.path.exists(DYNAMIC_MODEL_PATH) and os.path.exists(DYNAMIC_FEATURES_PATH):
+        model = joblib.load(DYNAMIC_MODEL_PATH)
+        feature_names = joblib.load(DYNAMIC_FEATURES_PATH)
+        return model, feature_names
+    else:
+        return None, None
+
 def predict_signals(model, feature_names, features_df):
-    # تضمین سازگاری ترتیب و نام ستون‌ها
     features_df = features_df.reindex(columns=feature_names, fill_value=0)
     try:
         y_pred = model.predict(features_df)[0]
