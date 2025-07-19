@@ -5,8 +5,12 @@ from utils.config import DB_CONFIG
 def get_latest_news(symbol, hours=800):
     conn = pymysql.connect(**DB_CONFIG)
     try:
-        query = "SELECT * FROM news WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR ORDER BY published_at DESC"
-        df = pd.read_sql(query, conn, params=[symbol, hours])
+        if hours is None:
+            query = "SELECT * FROM news WHERE symbol=%s ORDER BY published_at DESC"
+            df = pd.read_sql(query, conn, params=[symbol])
+        else:
+            query = "SELECT * FROM news WHERE symbol=%s AND published_at >= NOW() - INTERVAL %s HOUR ORDER BY published_at DESC"
+            df = pd.read_sql(query, conn, params=[symbol, hours])
         df = df.sort_values("published_at").reset_index(drop=True)
         return df
     finally:
