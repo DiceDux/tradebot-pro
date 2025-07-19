@@ -4,7 +4,7 @@ from utils.config import SYMBOLS
 from data.candle_manager import get_latest_candles
 from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
-from model.catboost_model import load_or_train_model, retrain_active_model, load_dynamic_model, predict_signals
+from model.catboost_model import load_or_train_model, retrain_active_model, predict_signals
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
 import importlib
@@ -17,8 +17,8 @@ FEE_RATE = 0.001
 TRADE_BALANCE_RATIO = 0.5
 
 def backtest(symbol, initial_balance=100):
-    candles = get_latest_candles(symbol, limit=3000)
-    news = get_latest_news(symbol, hours=365*24)
+    candles = get_latest_candles(symbol, limit=None)  # همه کندل‌ها
+    news = get_latest_news(symbol, hours=None)        # همه اخبار
     try:
         model, feature_names = load_or_train_model()
     except Exception as e:
@@ -54,12 +54,12 @@ def backtest(symbol, initial_balance=100):
     active_features = [f for f, v in FEATURE_CONFIG.items() if v]
     print(f"Active features for {symbol} (backtest): {active_features}")
 
-    # ریترین خودکار مدل با فیچرهای فعال
+    # ریترین مدل با همه داده‌های دیتابیس و فقط فیچرهای فعال
     X_full = []
     y_full = []
     for symbol_train in SYMBOLS:
-        candles_train = get_latest_candles(symbol_train, limit=3000)
-        news_train = get_latest_news(symbol_train, hours=365*24)
+        candles_train = get_latest_candles(symbol_train, limit=None)
+        news_train = get_latest_news(symbol_train, hours=None)
         if candles_train is None or candles_train.empty or len(candles_train) < 120:
             continue
         if not news_train.empty:
@@ -74,8 +74,7 @@ def backtest(symbol, initial_balance=100):
             elif isinstance(features, pd.Series):
                 features = features.to_dict()
             X_full.append({f: features.get(f, 0.0) for f in active_features})
-            y_full.append(candles_train.iloc[i].get("label", 1))  # فرض: ستون label وجود دارد
-
+            y_full.append(candles_train.iloc[i].get("label", 1))
     X_full_df = pd.DataFrame(X_full)
     y_full_arr = np.array(y_full)
     model_active = retrain_active_model(X_full_df, y_full_arr, active_features)
