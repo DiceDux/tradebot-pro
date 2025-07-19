@@ -12,6 +12,7 @@ from utils.price_fetcher import get_realtime_price
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
 import os
+import importlib
 
 LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 BALANCE = 100
@@ -55,7 +56,10 @@ def auto_feature_selection(symbol, model, all_feature_names):
     X = pd.DataFrame(features_list)
     monitor = FeatureMonitor(model, all_feature_names)
     monitor.evaluate_features(X)
-    return monitor.get_active_feature_names()
+    # ری‌لود فایل config تا تغییرات جدید اعمال شود
+    importlib.reload(importlib.import_module("feature_engineering.feature_config"))
+    from feature_engineering.feature_config import FEATURE_CONFIG
+    return [f for f, v in FEATURE_CONFIG.items() if v]
 
 def fetch_and_store_latest_data(symbol):
     candles = fetch_candles_binance(symbol, interval="4h", limit=200)
@@ -84,7 +88,7 @@ def price_updater():
                 if status_texts[symbol]:
                     old_lines = status_texts[symbol].split('\n')
                     for old_line in old_lines:
-                        if old_line.startswith("Signal:") or old_line.startswith("Balance:") or old_line.startswith("Entry:") or old_line.startswith("SL:") or old_line.startswith("TP") or old_line.startswith("QTY") or old_line.startswith("Position") or old_line.startswith("Last Trades:") or old_line.startswith("No active position"):
+                        if old_line.startswith("Signal:") or old_line.startswith("Balance:") or old_line.startswith("Entry:") or old_line.startswith("SL:") or old_line.startswith("TP") or old_line.sta[...]
                             lines.append(old_line)
                 status_texts[symbol] = '\n'.join(lines)
             except Exception as e:
@@ -236,9 +240,9 @@ def live_test():
                     features = features.iloc[0].to_dict()
                 elif isinstance(features, pd.Series):
                     features = features.to_dict()
-                X = pd.DataFrame([features])
                 active_features = feature_names_per_symbol[symbol]
-                X = X[active_features]
+                filtered_features = {f: features.get(f, 0.0) for f in active_features}
+                X = pd.DataFrame([filtered_features])
                 signal = predict_signals(model, active_features, X)[0]
 
                 # نمایش وضعیت
@@ -262,7 +266,7 @@ def live_test():
                 if recent_trades:
                     status_lines.append("Last Trades:")
                     for t in recent_trades:
-                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | QTY: {t.get('qty','-')} | PNL: {t.get('pnl','-') if 'pnl' in t else '-'} | Fee: {t.get('fee',0):.4f}")
+                        status_lines.append(f" {t['type']} | {t.get('side','')} | Entry: {t.get('entry_price',t.get('price',0)):.2f} | Exit: {t.get('exit_price','-') if 'exit_price' in t else '-'} | Q[...]
 
                 status_texts[symbol] = '\n'.join(status_lines)
 
