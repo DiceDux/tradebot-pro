@@ -34,11 +34,14 @@ def backtest(symbol, initial_balance=100):
 
     # ========== مانیتور فیچر با 200 کندل اول ==========
     candles_for_monitor = candles.iloc[:200]
-    news_for_monitor = news[news['published_at'] <= candles_for_monitor.iloc[-1]['timestamp']]
+    # حل ارور مقایسه تایپ: تبدیل timestamp به datetime
+    last_candle_time = pd.to_datetime(candles_for_monitor.iloc[-1]['timestamp'], unit='s')
+    news_for_monitor = news[news['published_at'] <= last_candle_time]
     X_monitor = []
     for i in range(len(candles_for_monitor) - 100, len(candles_for_monitor)):
         candle_slice = candles_for_monitor.iloc[:i + 1]
-        news_slice = news_for_monitor[news_for_monitor['published_at'] <= candle_slice.iloc[-1]['timestamp']] if not news_for_monitor.empty else pd.DataFrame()
+        candle_time = pd.to_datetime(candle_slice.iloc[-1]['timestamp'], unit='s')
+        news_slice = news_for_monitor[news_for_monitor['published_at'] <= candle_time] if not news_for_monitor.empty else pd.DataFrame()
         feat = build_features(candle_slice, news_slice, symbol)
         if isinstance(feat, pd.DataFrame):
             feat = feat.iloc[0].to_dict()
@@ -160,7 +163,6 @@ def backtest(symbol, initial_balance=100):
     print(f"Win Rate: {(wins/n_trades*100) if n_trades else 0:.1f}%")
     print(f"Final Balance: {balance:.2f}")
     print(f"Total Return: {100 * (balance-initial_balance)/initial_balance:.2f}%")
-    # رسم منحنی سرمایه (در صورت نیاز)
     try:
         import matplotlib.pyplot as plt
         plt.plot(balance_series)
