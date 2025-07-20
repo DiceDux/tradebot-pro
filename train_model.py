@@ -10,13 +10,7 @@ from model.catboost_model import FEATURES_PATH
 import joblib
 import os
 
-def make_label(candles, news_df=None, threshold=0.003, future_steps=12, past_steps=30):
-    """
-    فرصت‌طلب و فعال، اما Hold منطقی‌تر شد.
-    - شرط‌های خرید/فروش جسورانه (آستانه‌های پایین)
-    - Hold وقتی هیچ روند خاصی نباشد یا بازار رنج باشد (بدون breakout، بدون کراس، بدون spike، بدون شوک)
-    - اگر همزمان buy و sell برقرار بود، فاصله از high/low ملاک است
-    """
+def make_label(candles, news_df=None, threshold=0.002, future_steps=12, past_steps=30):
     closes = candles['close'].values
     highs = candles['high'].values
     lows = candles['low'].values
@@ -62,13 +56,11 @@ def make_label(candles, news_df=None, threshold=0.003, future_steps=12, past_ste
         buy_cond = (breakout_buy or ema_cross_buy or news_buy or vol_spike or atr_spike or short_trend_buy)
         sell_cond = (breakout_sell or ema_cross_sell or news_sell or vol_spike or atr_spike or short_trend_sell)
 
-        # فقط اگر هیچکدام برقرار نبود Hold بده
         if buy_cond and not sell_cond:
             labels.append(2)
         elif sell_cond and not buy_cond:
             labels.append(0)
         elif buy_cond and sell_cond:
-            # فرصت‌طلب‌تر: فاصله از high/low
             if abs(current-past_high) > abs(current-past_low):
                 labels.append(2)
             else:
@@ -85,14 +77,19 @@ all_labels = []
 all_cols = set()
 
 for symbol in SYMBOLS:
-    candles = get_latest_candles(symbol, limit=None)  # همه کندل‌ها بدون محدودیت
-    news = get_latest_news(symbol, hours=None)        # همه اخبار بدون محدودیت
+    candles = get_latest_candles(symbol, limit=None)
+    news = get_latest_news(symbol, hours=None)
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
-    # مقدار threshold را کاهش دادیم تا buy/sell فعال‌تر شود
-    candles = make_label(candles, news, threshold=0.003)
-    print(f"Label distribution for {symbol}\n{candles['label'].value_counts()}")
+    candles = make_label(candles, news, threshold=0.002)
+    label_counts = candles['label'].value_counts()
+    print(f"Label distribution for {symbol}\n{label_counts}")
+
+    # اگر فقط یک کلاس بود، از ادامه آموزش صرف‌نظر کن
+    if label_counts.nunique() == 1:
+        print(f"[{symbol}] Only one class present in the labels, skipping training for this symbol.")
+        continue
 
     if not news.empty:
         news['published_at'] = pd.to_datetime(news['published_at'])
