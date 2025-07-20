@@ -3,7 +3,7 @@ import pandas as pd
 import threading
 import tkinter as tk
 from feature_engineering.feature_engineer import build_features
-from model.catboost_model import load_or_train_model, retrain_active_model, predict_signals
+from model.catboost_model import load_or_train_model, retrain_active_model, load_dynamic_model, predict_signals
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news, get_news_for_range
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
@@ -28,7 +28,6 @@ NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
 trades_log = []
 status_texts = {symbol: "" for symbol in LIVE_SYMBOLS}
 latest_prices = {symbol: 0.0 for symbol in LIVE_SYMBOLS}
-
 positions = {symbol: None for symbol in LIVE_SYMBOLS}
 entry_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
 sl_price = {symbol: 0 for symbol in LIVE_SYMBOLS}
@@ -36,6 +35,7 @@ tp_prices = {symbol: [] for symbol in LIVE_SYMBOLS}
 qty_left = {symbol: 1.0 for symbol in LIVE_SYMBOLS}
 tp_idx = {symbol: 0 for symbol in LIVE_SYMBOLS}
 balance = {symbol: BALANCE for symbol in LIVE_SYMBOLS}
+active_feature_names_per_symbol = {}
 
 def activate_all_features():
     for k in FEATURE_CONFIG.keys():
@@ -204,11 +204,10 @@ def tp_sl_watcher():
         time.sleep(1)
 
 def live_test():
-    global status_texts, positions, entry_price, sl_price, tp_prices, qty_left, tp_idx, balance, trades_log
+    global status_texts, positions, entry_price, sl_price, tp_prices, qty_left, tp_idx, balance, trades_log, active_feature_names_per_symbol
 
     model, all_feature_names = load_or_train_model()
     activate_all_features()
-    feature_names_per_symbol = {}
     model_per_symbol = {}
 
     # دریافت و ذخیره دیتا پیش از تحلیل
@@ -219,11 +218,10 @@ def live_test():
     for symbol in LIVE_SYMBOLS:
         print(f"Selecting best features for {symbol} ...")
         active_features = auto_feature_selection(symbol, model, all_feature_names)
-        feature_names_per_symbol[symbol] = active_features
         print(f"Active features for {symbol}: {active_features}")
 
-        candles_train = get_latest_candles(symbol, limit=None)  # همه کندل‌ها
-        news_train = get_latest_news(symbol, hours=None)        # همه اخبار
+        candles_train = get_latest_candles(symbol, limit=None)
+        news_train = get_latest_news(symbol, hours=None)
         if not news_train.empty:
             news_train['published_at'] = pd.to_datetime(news_train['published_at'])
         X_full = []
@@ -242,7 +240,13 @@ def live_test():
         X_full_df = pd.DataFrame(X_full)
         y_full_arr = np.array(y_full)
         model_active = retrain_active_model(X_full_df, y_full_arr, active_features)
+        # بعد از ریترین، حتماً مدل فعال و فیچرهای داینامیک را از فایل لود کن
+        model_active, dynamic_features = load_dynamic_model()
+        if model_active is None or dynamic_features is None:
+            print(f"[{symbol}] ERROR: Active model or features not found after retrain!")
+            continue
         model_per_symbol[symbol] = model_active
+        active_feature_names_per_symbol[symbol] = dynamic_features
 
     print("===== Starting LIVE trading/test =====")
     last_main_loop = 0
@@ -275,16 +279,23 @@ def live_test():
                     features = features.iloc[0].to_dict()
                 elif isinstance(features, pd.Series):
                     features = features.to_dict()
-                active_features = feature_names_per_symbol[symbol]
+                active_features = active_feature_names_per_symbol.get(symbol, [])
+                if not active_features:
+                    print(f"[{symbol}] ERROR: No active features found for prediction!")
+                    continue
                 row = {f: features.get(f, 0.0) for f in active_features}
                 X = pd.DataFrame([row])
-                model_active = model_per_symbol[symbol]
-                signal = predict_signals(model_active, active_features, X)[0]
+                model_active = model_per_symbol.get(symbol)
+                if model_active is None:
+                    print(f"[{symbol}] ERROR: No active model for prediction!")
+                    continue
+                signal, analysis = predict_signals(model_active, active_features, X)
+                confidence = analysis.get("confidence", 0.0)
 
                 status_lines = [
                     f"Symbol: {symbol}",
                     f"Price: {price_now:.2f}",
-                    f"Signal: {signal}",
+                    f"Signal: {signal} | Confidence: {confidence:.2f}",
                     f"Balance: {balance[symbol]:.2f}"
                 ]
                 if positions[symbol] is not None:
@@ -310,8 +321,9 @@ def live_test():
 
                 status_texts[symbol] = '\n'.join(status_lines)
 
-                if positions[symbol] is None:
-                    if signal == 2:
+                # فقط اگر اعتماد سیگنال بالای آستانه بود معامله انجام بده
+                if positions[symbol] is None and confidence >= THRESHOLD:
+                    if signal == "Buy":
                         positions[symbol] = "LONG"
                         entry_price[symbol] = price_now
                         sl_price[symbol] = price_now * (1 - SL_PCT)
@@ -327,7 +339,7 @@ def live_test():
                             'timestamp': time.time()
                         })
                         save_trades_log()
-                    elif signal == 0:
+                    elif signal == "Sell":
                         positions[symbol] = "SHORT"
                         entry_price[symbol] = price_now
                         sl_price[symbol] = price_now * (1 + SL_PCT)
