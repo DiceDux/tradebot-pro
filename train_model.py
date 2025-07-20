@@ -10,7 +10,7 @@ from model.catboost_model import FEATURES_PATH
 import joblib
 import os
 
-def make_label(candles, news_df=None, threshold=0.008, future_steps=12, past_steps=30):
+def make_label(candles, news_df=None, threshold=0.003, future_steps=12, past_steps=30):
     """
     فرصت‌طلب و فعال، اما Hold منطقی‌تر شد.
     - شرط‌های خرید/فروش جسورانه (آستانه‌های پایین)
@@ -90,7 +90,8 @@ for symbol in SYMBOLS:
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
-    candles = make_label(candles, news)
+    # مقدار threshold را کاهش دادیم تا buy/sell فعال‌تر شود
+    candles = make_label(candles, news, threshold=0.003)
     print(f"Label distribution for {symbol}\n{candles['label'].value_counts()}")
 
     if not news.empty:
@@ -149,5 +150,8 @@ for f in glob.glob("model/catboost_tradebot_pro.pkl") + glob.glob("model/catboos
         print(f"Failed to delete {f}: {e}")
 
 model = train_model(X, y)
-feature_names = joblib.load(FEATURES_PATH)
-auto_select_features(model, feature_names, top_n=30)
+if model is not None:
+    feature_names = joblib.load(FEATURES_PATH)
+    auto_select_features(model, feature_names, top_n=30)
+else:
+    print("Training failed due to lack of label diversity.")
