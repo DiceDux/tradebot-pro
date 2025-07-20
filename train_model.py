@@ -10,7 +10,6 @@ from model.catboost_model import FEATURES_PATH
 import joblib
 import os
 
-# منطق تستی و تضمینی برای فعال شدن buy/sell
 def make_label(candles, news_df=None, threshold=0.001, future_steps=6, past_steps=15):
     closes = candles['close'].values
     highs = candles['high'].values
@@ -46,7 +45,6 @@ for symbol in SYMBOLS:
     label_counts = candles['label'].value_counts()
     print(f"Label distribution for {symbol}\n{label_counts}")
 
-    # اگر فقط یک کلاس بود، از ادامه آموزش صرف‌نظر کن
     if label_counts.nunique() == 1:
         print(f"[{symbol}] Only one class present in the labels, skipping training for this symbol.")
         continue
@@ -60,8 +58,6 @@ for symbol in SYMBOLS:
             continue
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time] if not news.empty else pd.DataFrame()
-        if i % 200 == 0:
-            print(f"[{symbol}][{i}] News count in window: {len(news_slice)}")
         features = build_features(candle_slice, news_slice, symbol)
         features_clean = {}
         for col in features.columns:
