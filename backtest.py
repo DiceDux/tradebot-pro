@@ -4,7 +4,7 @@ from utils.config import SYMBOLS
 from data.candle_manager import get_latest_candles
 from data.news_manager import get_latest_news
 from feature_engineering.feature_engineer import build_features
-from model.catboost_model import load_or_train_model, retrain_active_model, predict_signals
+from model.catboost_model import load_or_train_model, retrain_active_model, load_dynamic_model, predict_signals
 from feature_engineering.feature_monitor import FeatureMonitor
 from feature_engineering.feature_config import FEATURE_CONFIG
 import importlib
@@ -12,13 +12,13 @@ import importlib
 TP_STEPS = [0.03, 0.05, 0.07]
 TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
-THRESHOLD = 0.6
+THRESHOLD = 0.7
 FEE_RATE = 0.001
 TRADE_BALANCE_RATIO = 0.5
 
 def backtest(symbol, initial_balance=100):
-    candles = get_latest_candles(symbol, limit=None)  # همه کندل‌ها
-    news = get_latest_news(symbol, hours=None)        # همه اخبار
+    candles = get_latest_candles(symbol, limit=None)
+    news = get_latest_news(symbol, hours=None)
     try:
         model, feature_names = load_or_train_model()
     except Exception as e:
@@ -77,7 +77,12 @@ def backtest(symbol, initial_balance=100):
             y_full.append(candles_train.iloc[i].get("label", 1))
     X_full_df = pd.DataFrame(X_full)
     y_full_arr = np.array(y_full)
-    model_active = retrain_active_model(X_full_df, y_full_arr, active_features)
+    retrain_active_model(X_full_df, y_full_arr, active_features)
+    # بعد از ریترین، مدل فعال و فیچرهای داینامیک را از فایل لود کن
+    model_active, dynamic_features = load_dynamic_model()
+    if model_active is None or dynamic_features is None:
+        print(f"[{symbol}] ERROR: Active model or features not found after retrain!")
+        return None
 
     position = None
     entry_price = 0
@@ -97,9 +102,9 @@ def backtest(symbol, initial_balance=100):
         candle_time = pd.to_datetime(candles.iloc[i]['timestamp'], unit='s')
         news_slice = news[news['published_at'] <= candle_time] if not news.empty else pd.DataFrame()
         features = build_features(candle_slice, news_slice, symbol)
-        row = {f: features.get(f, 0.0) for f in active_features}
+        row = {f: features.get(f, 0.0) for f in dynamic_features}
         features_df = pd.DataFrame([row])
-        signal, analysis = predict_signals(model_active, active_features, features_df)
+        signal, analysis = predict_signals(model_active, dynamic_features, features_df)
         confidence = analysis.get("confidence", 0.0)
         if confidence < THRESHOLD:
             signal = "Hold"
