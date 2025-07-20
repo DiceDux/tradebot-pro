@@ -10,64 +10,24 @@ from model.catboost_model import FEATURES_PATH
 import joblib
 import os
 
-def make_label(candles, news_df=None, threshold=0.002, future_steps=12, past_steps=30):
+# منطق تستی و تضمینی برای فعال شدن buy/sell
+def make_label(candles, news_df=None, threshold=0.001, future_steps=6, past_steps=15):
     closes = candles['close'].values
     highs = candles['high'].values
     lows = candles['low'].values
-    volumes = candles['volume'].values
     labels = []
     for i in range(past_steps, len(closes) - future_steps):
         current = closes[i]
-        past_high = highs[i-past_steps:i].max()
-        past_low = lows[i-past_steps:i].min()
-        ema9 = candles['close'][i-past_steps:i+1].ewm(span=9).mean().values[-1]
-        ema21 = candles['close'][i-past_steps:i+1].ewm(span=21).mean().values[-1]
-        prev_ema9 = candles['close'][i-past_steps:i].ewm(span=9).mean().values[-1]
-        prev_ema21 = candles['close'][i-past_steps:i].ewm(span=21).mean().values[-1]
-        atr = (candles['high'][i-past_steps:i+1] - candles['low'][i-past_steps:i+1]).rolling(window=14).mean().values[-1]
-        prev_atr = (candles['high'][i-past_steps:i] - candles['low'][i-past_steps:i]).rolling(window=14).mean().values[-1]
-        vol = volumes[i]
-        mean_vol = volumes[i-past_steps:i].mean()
-
-        # شوک خبری
-        shock = 0
-        shock_count = 0
-        if news_df is not None and not news_df.empty:
-            t0 = candles.iloc[i]['timestamp']
-            news_df = news_df.copy()
-            if 'ts' not in news_df.columns and 'published_at' in news_df.columns:
-                news_df['ts'] = pd.to_datetime(news_df['published_at']).astype('int64') // 10**9
-            shock_news = news_df[(news_df['ts'] <= t0) & (news_df['ts'] > t0 - 3600*6)]
-            if not shock_news.empty and 'sentiment_score' in shock_news:
-                shock = shock_news['sentiment_score'].astype(float).mean()
-            shock_count = len(shock_news[(shock_news['sentiment_score'] > 0.1) | (shock_news['sentiment_score'] < -0.1)])
-
-        breakout_buy = (current > past_high * 1.0003)
-        breakout_sell = (current < past_low * 0.9997)
-        ema_cross_buy = (prev_ema9 < prev_ema21) and (ema9 > ema21)
-        ema_cross_sell = (prev_ema9 > prev_ema21) and (ema9 < ema21)
-        vol_spike = vol > mean_vol * 1.1
-        atr_spike = atr > prev_atr * 1.1 if prev_atr > 0 else False
-        news_buy = (shock > 0.1 and shock_count >= 1)
-        news_sell = (shock < -0.1 and shock_count >= 1)
-        short_trend_buy = (current > closes[i-3:i].mean() * 1.001)
-        short_trend_sell = (current < closes[i-3:i].mean() * 0.999)
-
-        buy_cond = (breakout_buy or ema_cross_buy or news_buy or vol_spike or atr_spike or short_trend_buy)
-        sell_cond = (breakout_sell or ema_cross_sell or news_sell or vol_spike or atr_spike or short_trend_sell)
-
+        future_high = highs[i+1:i+future_steps+1].max()
+        future_low = lows[i+1:i+future_steps+1].min()
+        buy_cond = (future_high - current) / current > threshold
+        sell_cond = (current - future_low) / current > threshold
         if buy_cond and not sell_cond:
             labels.append(2)
         elif sell_cond and not buy_cond:
             labels.append(0)
-        elif buy_cond and sell_cond:
-            if abs(current-past_high) > abs(current-past_low):
-                labels.append(2)
-            else:
-                labels.append(0)
         else:
             labels.append(1)
-
     candles = candles.iloc[past_steps:-(future_steps)].copy()
     candles['label'] = labels
     return candles
@@ -82,7 +42,7 @@ for symbol in SYMBOLS:
     if candles is None or candles.empty:
         print(f"[{symbol}] Candles is empty!")
         continue
-    candles = make_label(candles, news, threshold=0.002)
+    candles = make_label(candles, news, threshold=0.001)
     label_counts = candles['label'].value_counts()
     print(f"Label distribution for {symbol}\n{label_counts}")
 
