@@ -9,3 +9,6 @@ pymysql
 joblib
 transformers 
 torch
+tensorflow 
+imblearn 
+scikit-learn
