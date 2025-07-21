@@ -475,6 +475,23 @@ class SmartTraderBot:
         threading.Thread(target=root.mainloop, daemon=True).start()
 
 # فقط در صورت اجرا به عنوان اسکریپت اصلی
+import argparse
+
+# در انتهای فایل، در قسمت اجرای اصلی:
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Smart Trading Bot with Enhanced Architecture')
+    parser.add_argument('--train_base', action='store_true', help='Train the base model with all features')
+    parser.add_argument('--backtest', action='store_true', help='Run backtest instead of live trading')
+    args = parser.parse_args()
+    
     bot = SmartTraderBot()
-    bot.run()
+    
+    if args.train_base:
+        print("Training base model with all features...")
+        bot._train_base_model()
+    elif args.backtest:
+        print("Running backtest mode...")
+        bot.run_backtest()
+    else:
+        print("Starting live trading mode...")
+        bot.run()
