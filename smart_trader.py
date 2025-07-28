@@ -6,7 +6,9 @@ import os
 from datetime import datetime
 import threading
 import tkinter as tk
+import argparse
 
+# اصلاح مسیرهای ایمپورت - حذف پیشوند backend.
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news
 from data.fetch_online import fetch_candles_binance, save_candles_to_db, fetch_news_newsapi, save_news_to_db
@@ -15,7 +17,6 @@ from feature_engineering.sentiment_finbert import analyze_sentiment_finbert
 from utils.price_fetcher import get_realtime_price
 from model.enhanced_base_model import EnhancedBaseModel
 from feature_engineering.adaptive_feature_selector import AdaptiveFeatureSelector
-
 from rl_models.dqn_tpsl_manager import DQNTPSLManager
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
@@ -474,10 +475,14 @@ class SmartTraderBot:
         # شروع حلقه اصلی UI
         threading.Thread(target=root.mainloop, daemon=True).start()
 
-# فقط در صورت اجرا به عنوان اسکریپت اصلی
-import argparse
+    def run_backtest(self):
+        """اجرای بک‌تست"""
+        self.initialize()
+        print("Running backtest...")
+        # منطق بک‌تست اینجا پیاده‌سازی می‌شود
 
-# در انتهای فایل، در قسمت اجرای اصلی:
+
+# فقط در صورت اجرا به عنوان اسکریپت اصلی
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Smart Trading Bot with Enhanced Architecture')
     parser.add_argument('--train_base', action='store_true', help='Train the base model with all features')

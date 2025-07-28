@@ -2,7 +2,6 @@ pandas
 numpy
 catboost
 ta
-TA_Lib
 requests
 sqlalchemy
 pymysql
@@ -12,3 +11,7 @@ torch
 tensorflow 
 imblearn 
 scikit-learn
+ 
+#python smart_trader.py --train_base
+#python smart_trader.py --backtest
+#python smart_trader.py
