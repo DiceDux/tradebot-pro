@@ -180,6 +180,8 @@ class SmartTraderCLI:
         # دریافت کندل‌ها
         candles = fetch_candles_binance(symbol, interval="4h", limit=200)
         save_candles_to_db(candles)
+        
+        # فقط بررسی تعداد کندل‌ها - بدون حذف!
         keep_last_200_candles(symbol)
         
         # دریافت اخبار
@@ -589,6 +591,19 @@ class SmartTraderCLI:
         
         return backtest_results
 
+    def download_all_historical_data(self):
+        """دانلود همه داده‌های تاریخی برای همه نمادها"""
+        print("Downloading all historical data...")
+        
+        start_date = "2017-01-01"  # از ابتدای 2017
+        end_date = datetime.now().strftime('%Y-%m-%d')  # تا امروز
+        
+        for symbol in SYMBOLS:
+            print(f"Downloading historical data for {symbol}...")
+            self._download_historical_data_for_backtest(symbol, start_date, end_date)
+            
+        print("All historical data downloaded successfully!")
+
     def _get_historical_news(self, symbol, start_ts, end_ts):
         """دریافت اخبار تاریخی برای بک‌تست"""
         try:
@@ -618,15 +633,12 @@ class SmartTraderCLI:
             
             if df.empty:
                 print(f"No news found for {symbol} in the given time period")
-                # برگرداندن DataFrame خالی با ستون‌های مورد نیاز
                 return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
                     
             return df
                 
         except Exception as e:
             print(f"Error getting historical news: {e}")
-            import traceback
-            print(traceback.format_exc())
             return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
 
     def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
@@ -949,10 +961,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Smart Trading Bot CLI')
     parser.add_argument('--train_base', action='store_true', help='Train the base model with all features')
     parser.add_argument('--backtest', action='store_true', help='Run backtest instead of live trading')
+    parser.add_argument('--download_historical', action='store_true', help='Download all historical data for all symbols')
     args = parser.parse_args()
     
     bot = SmartTraderCLI()
-    
+    if args.download_historical:
+        print("Downloading all historical data...")
+        bot.download_all_historical_data()
+        
     if args.train_base:
         print("Training base model with all features...")
         bot._train_base_model()
