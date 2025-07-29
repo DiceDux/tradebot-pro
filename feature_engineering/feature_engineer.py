@@ -434,44 +434,64 @@ def build_features(candles_df, news_df, symbol):
     total_weight = 0.0
     result = {}
 
-    if news_df is not None and not news_df.empty:
+    # اطمینان از اینکه news_df شامل اطلاعات و ستون‌های مورد نیاز است
+    if news_df is not None and not news_df.empty and 'sentiment_score' in news_df.columns:
         features['news_count'] = len(news_df)
-        features['news_sentiment_mean'] = news_df['sentiment_score'].astype(float).mean() if 'sentiment_score' in news_df else 0.0
-        features['news_sentiment_std'] = news_df['sentiment_score'].astype(float).std() if 'sentiment_score' in news_df else 0.0
-        features['news_pos_count'] = news_df[news_df['sentiment_score'].astype(float) > 0.1].shape[0] if 'sentiment_score' in news_df else 0
-        features['news_neg_count'] = news_df[news_df['sentiment_score'].astype(float) < -0.1].shape[0] if 'sentiment_score' in news_df else 0
-        features['news_latest_sentiment'] = news_df['sentiment_score'].astype(float).values[0] if 'sentiment_score' in news_df else 0.0
-        features['news_content_len'] = news_df['content'].str.len().mean() if 'content' in news_df else 0.0
+        features['news_sentiment_mean'] = news_df['sentiment_score'].astype(float).mean()
+        features['news_sentiment_std'] = news_df['sentiment_score'].astype(float).std()
+        features['news_pos_count'] = news_df[news_df['sentiment_score'].astype(float) > 0.1].shape[0]
+        features['news_neg_count'] = news_df[news_df['sentiment_score'].astype(float) < -0.1].shape[0]
+        features['news_latest_sentiment'] = news_df['sentiment_score'].astype(float).values[0] if len(news_df) > 0 else 0.0
+        features['news_content_len'] = news_df['content'].str.len().mean() if 'content' in news_df.columns else 0.0
 
+        # اضافه کردن فیچرهای مبتنی بر بازه زمانی
         for rng, seconds in ranges.items():
-            recent = news_df[news_df['ts'] >= now_ts-seconds]
-            result[f'news_count_{rng}'] = len(recent)
-            if len(recent) > 0 and 'sentiment_score' in recent:
-                s = recent['sentiment_score'].astype(float)
-                result[f'news_sentiment_mean_{rng}'] = s.mean()
-                result[f'news_sentiment_max_{rng}'] = s.max()
-                result[f'news_sentiment_min_{rng}'] = s.min()
-                result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
-                result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
-                weighted_score += s.mean() * weights[rng]
-                total_weight += weights[rng]
+            ts_column = 'ts' if 'ts' in news_df.columns else 'timestamp'
+            if ts_column in news_df.columns:
+                recent = news_df[news_df[ts_column] >= now_ts-seconds]
+                result[f'news_count_{rng}'] = len(recent)
+                
+                if len(recent) > 0 and 'sentiment_score' in recent:
+                    s = recent['sentiment_score'].astype(float)
+                    result[f'news_sentiment_mean_{rng}'] = s.mean()
+                    result[f'news_sentiment_max_{rng}'] = s.max()
+                    result[f'news_sentiment_min_{rng}'] = s.min()
+                    result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
+                    result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
+                    weighted_score += s.mean() * weights[rng]
+                    total_weight += weights[rng]
+                else:
+                    for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
+                        result[f'news_{v}_{rng}'] = 0.0
             else:
+                # اگر ستون timestamp نداریم، مقادیر پیش‌فرض را قرار می‌دهیم
+                result[f'news_count_{rng}'] = 0
                 for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
                     result[f'news_{v}_{rng}'] = 0.0
+                    
+        # محاسبه امتیاز وزن‌دار
         if total_weight > 0:
             result['news_weighted_score'] = weighted_score / total_weight
         else:
             result['news_weighted_score'] = 0.0
+            
         features.update(result)
     else:
-        for name in ['news_count','news_sentiment_mean','news_sentiment_std','news_pos_count',
-                     'news_neg_count','news_latest_sentiment','news_content_len']:
-            features[name] = 0.0
+        # اگر اخباری موجود نیست، همه فیچرهای خبری را با مقادیر پیش‌فرض پر می‌کنیم
+        features['news_count'] = 0
+        features['news_sentiment_mean'] = 0.0
+        features['news_sentiment_std'] = 0.0
+        features['news_pos_count'] = 0
+        features['news_neg_count'] = 0
+        features['news_latest_sentiment'] = 0.0
+        features['news_content_len'] = 0.0
+        features['news_weighted_score'] = 0.0
+        
+        # فیچرهای زمانی خبری را نیز با مقادیر پیش‌فرض پر می‌کنیم
         for rng in ranges:
-            features[f'news_count_{rng}'] = 0.0
+            features[f'news_count_{rng}'] = 0
             for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
                 features[f'news_{v}_{rng}'] = 0.0
-        features['news_weighted_score'] = 0.0
 
     features_df = pd.DataFrame([features])
     features_df = features_df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
