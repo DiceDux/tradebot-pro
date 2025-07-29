@@ -225,20 +225,28 @@ class SmartTraderBot:
         # پیش‌بینی با مدل پایه
         pred_class, pred_proba, confidence = self.base_model.predict(X_filtered)
         
+        # تبدیل مقدار numpy به int معمولی
+        class_idx = int(pred_class[0])
+        conf_value = float(confidence[0])
+        
         signal_map = {0: "Sell", 1: "Hold", 2: "Buy"}
-        signal = signal_map.get(pred_class[0], "Hold")
+        signal = signal_map.get(class_idx, "Hold")
         
-        print(f"Signal for {symbol}: {signal} with confidence {confidence[0]:.2f}")
+        print(f"Signal for {symbol}: {signal} with confidence {conf_value:.2f}")
         
-        return signal, confidence[0]
-    
+        return signal, conf_value
+
     def execute_trades(self):
         """اجرای معاملات بر اساس سیگنال‌ها"""
         for symbol in SYMBOLS:
             try:
                 # بروزرسانی قیمت فعلی
-                price_now = get_realtime_price(symbol)
-                self.latest_prices[symbol] = price_now
+                try:
+                    price_now = get_realtime_price(symbol)
+                    self.latest_prices[symbol] = price_now
+                except Exception as e:
+                    print(f"Error getting price for {symbol}: {e}")
+                    price_now = 0.0
                 
                 # فقط اگر پوزیشن فعال نداریم، تحلیل انجام می‌دهیم
                 if self.positions[symbol] is None:
@@ -258,7 +266,9 @@ class SmartTraderBot:
                 self._update_status(symbol, price_now)
             
             except Exception as e:
+                import traceback
                 print(f"Error in execute_trades for {symbol}: {e}")
+                print(traceback.format_exc())  # چاپ جزئیات بیشتر خطا
     
     def _open_position(self, symbol, direction, price):
         """باز کردن پوزیشن جدید"""
@@ -442,8 +452,41 @@ class SmartTraderBot:
     
     def _start_ui(self):
         """راه‌اندازی رابط کاربری ساده"""
-        def update_price_thread():
-            while True:
+        try:
+            # اجرای UI در thread اصلی به جای thread جداگانه
+            root = tk.Tk()
+            root.title("Smart Trading Bot")
+            label = tk.Label(root, text="Initializing...", font=("Arial", 13), justify="left")
+            label.pack(padx=20, pady=20)
+            
+            # شروع ترد آپدیت قیمت‌ها
+            threading.Thread(target=self._update_price_thread, daemon=True).start()
+            
+            # آپدیت GUI
+            def gui_update():
+                try:
+                    all_status = '\n\n'.join([self.status_texts[symbol] for symbol in SYMBOLS])
+                    label.config(text=all_status)
+                    label.after(1000, gui_update)
+                except Exception as e:
+                    print(f"Error in GUI update: {e}")
+            
+            label.after(1000, gui_update)
+            
+            # حلقه اصلی GUI و معاملات را جدا کنیم
+            threading.Thread(target=self._trading_loop, daemon=True).start()
+            
+            # شروع حلقه اصلی UI
+            root.mainloop()
+        except Exception as e:
+            print(f"Error starting UI: {e}")
+            # اگر UI شکست خورد، حداقل لوپ اصلی معاملات را اجرا کن
+            self._trading_loop()
+
+    def _update_price_thread(self):
+        """thread آپدیت قیمت‌ها"""
+        while True:
+            try:
                 for symbol in SYMBOLS:
                     try:
                         price = get_realtime_price(symbol)
@@ -451,13 +494,37 @@ class SmartTraderBot:
                     except Exception as e:
                         print(f"Price fetch error for {symbol}: {e}")
                 time.sleep(1)
+            except Exception as e:
+                print(f"Error in price update thread: {e}")
+                time.sleep(5)  # در صورت خطا، کمی صبر کن
+
+    def _trading_loop(self):
+        """حلقه اصلی معاملات"""
+        last_execution = 0
+        interval = 60  # بررسی هر 60 ثانیه
         
-        def update_gui(label):
-            def gui_update():
-                all_status = '\n\n'.join([self.status_texts[symbol] for symbol in SYMBOLS])
-                label.config(text=all_status)
-                label.after(1000, gui_update)
-            return gui_update
+        print("Starting main trading loop...")
+        try:
+            while True:
+                now = time.time()
+                if now - last_execution >= interval:
+                    self.execute_trades()
+                    last_execution = now
+                
+                time.sleep(1)
+        
+        except KeyboardInterrupt:
+            print("Trading bot stopped by user")
+        except Exception as e:
+            print(f"Error in main loop: {e}")
+
+    # و در تابع اصلی run، به جای اجرای دو ترد جداگانه
+    def run(self):
+        """اجرای ربات در حلقه اصلی"""
+        self.initialize()
+        
+        # راه‌اندازی UI (حالا با حلقه اصلی داخلی)
+        self._start_ui()
         
         # راه‌اندازی GUI
         root = tk.Tk()
