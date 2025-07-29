@@ -431,24 +431,6 @@ class SmartTraderBot:
         
         # راه‌اندازی UI
         self._start_ui()
-        
-        last_execution = 0
-        interval = 60  # بررسی هر 60 ثانیه
-        
-        print("Starting main trading loop...")
-        try:
-            while True:
-                now = time.time()
-                if now - last_execution >= interval:
-                    self.execute_trades()
-                    last_execution = now
-                
-                time.sleep(1)
-        
-        except KeyboardInterrupt:
-            print("Trading bot stopped by user")
-        except Exception as e:
-            print(f"Error in main loop: {e}")
     
     def _start_ui(self):
         """راه‌اندازی رابط کاربری ساده"""
@@ -517,30 +499,6 @@ class SmartTraderBot:
             print("Trading bot stopped by user")
         except Exception as e:
             print(f"Error in main loop: {e}")
-
-    # و در تابع اصلی run، به جای اجرای دو ترد جداگانه
-    def run(self):
-        """اجرای ربات در حلقه اصلی"""
-        self.initialize()
-        
-        # راه‌اندازی UI (حالا با حلقه اصلی داخلی)
-        self._start_ui()
-        
-        # راه‌اندازی GUI
-        root = tk.Tk()
-        root.title("Smart Trading Bot")
-        label = tk.Label(root, text="Initializing...", font=("Arial", 13), justify="left")
-        label.pack(padx=20, pady=20)
-        
-        # شروع ترد آپدیت قیمت‌ها
-        threading.Thread(target=update_price_thread, daemon=True).start()
-        
-        # تنظیم آپدیت GUI
-        update_func = update_gui(label)
-        label.after(1000, update_func)
-        
-        # شروع حلقه اصلی UI
-        threading.Thread(target=root.mainloop, daemon=True).start()
 
     def run_backtest(self):
         """اجرای بک‌تست"""
