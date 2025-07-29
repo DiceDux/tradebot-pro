@@ -9,6 +9,7 @@ import os
 from datetime import datetime
 import threading
 import argparse
+import sqlite3
 
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news
@@ -447,10 +448,279 @@ class SmartTraderCLI:
         print("="*50 + "\n")
     
     def run_backtest(self):
-        """اجرای بک‌تست"""
+        """اجرای بک‌تست روی داده‌های تاریخی"""
         self.initialize()
-        print("Running backtest...")
-        print("Backtest not implemented yet in CLI version")
+        print("Running backtest on historical data...")
+        
+        # تنظیم پارامترهای بک‌تست
+        start_date = "2023-01-01"
+        end_date = "2025-07-01"
+        initial_balance = 1000.0  # سرمایه اولیه برای هر نماد
+        
+        backtest_results = {}
+        
+        for symbol in SYMBOLS:
+            print(f"\n===== Backtesting {symbol} from {start_date} to {end_date} =====")
+            
+            # تنظیم مجدد متغیرهای حساب برای بک‌تست
+            self.balance[symbol] = initial_balance
+            self.positions[symbol] = None
+            self.trades_log = []
+            
+            # دریافت داده‌های تاریخی
+            historical_candles = self._get_historical_data(symbol, start_date, end_date)
+            if historical_candles is None or historical_candles.empty:
+                print(f"No historical data available for {symbol}")
+                continue
+                
+            print(f"Loaded {len(historical_candles)} historical candles")
+            
+            # اجرای بک‌تست روی هر شمع
+            total_candles = len(historical_candles)
+            lookback = 100  # تعداد شمع‌های قبلی برای تحلیل
+            
+            for i in range(lookback, total_candles):
+                if i % 50 == 0:
+                    print(f"Processing candle {i}/{total_candles} ({(i/total_candles*100):.1f}%)")
+                
+                # شبیه‌سازی شرایط فعلی بازار با دیتای تاریخی
+                current_candle = historical_candles.iloc[i]
+                current_time = pd.to_datetime(current_candle['timestamp'], unit='s')
+                
+                # آخرین قیمت در این لحظه زمانی
+                current_price = current_candle['close']
+                self.latest_prices[symbol] = current_price
+                
+                # فقط اگر پوزیشن فعال نداریم، تحلیل انجام می‌دهیم
+                if self.positions[symbol] is None:
+                    # گرفتن بخشی از داده‌های تاریخی تا این لحظه
+                    candles_slice = historical_candles.iloc[i-lookback:i+1]
+                    
+                    # شبیه‌سازی اخبار (یا می‌توانیم از دیتاست واقعی اخبار استفاده کنیم)
+                    dummy_news = pd.DataFrame()
+                    
+                    # شبیه‌سازی ساخت فیچرها
+                    features = build_features(candles_slice, dummy_news, symbol)
+                    if isinstance(features, pd.DataFrame):
+                        features_dict = features.iloc[0].to_dict()
+                    else:
+                        features_dict = features.to_dict()
+                    
+                    # انتخاب فیچرهای مناسب
+                    market_data = pd.DataFrame([features_dict])
+                    selected_features = self.feature_selector.select_features(market_data)
+                    
+                    # استفاده از مدل با فیچرهای منتخب
+                    X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in selected_features})
+                    pred_class, pred_proba, confidence = self.base_model.predict(X_filtered)
+                    
+                    # تبدیل به مقادیر اسکالر
+                    class_idx = int(pred_class[0]) if isinstance(pred_class[0], (np.ndarray, np.generic)) else int(pred_class[0])
+                    conf_value = float(confidence[0]) if isinstance(confidence[0], (np.ndarray, np.generic)) else float(confidence[0])
+                    
+                    signal_map = {0: "Sell", 1: "Hold", 2: "Buy"}
+                    signal = signal_map.get(class_idx, "Hold")
+                    
+                    # اگر اطمینان کافی وجود دارد، معامله می‌کنیم
+                    if conf_value >= THRESHOLD:
+                        if signal == "Buy":
+                            self._open_position(symbol, "LONG", current_price, current_time.timestamp())
+                        elif signal == "Sell":
+                            self._open_position(symbol, "SHORT", current_price, current_time.timestamp())
+                
+                # مدیریت TP/SL
+                self._manage_positions(symbol, current_price, current_time.timestamp())
+                
+                # هر 500 شمع وضعیت را نمایش بده
+                if i % 500 == 0 and i > 0:
+                    self._print_backtest_status(symbol)
+            
+            # آنالیز نتایج بک‌تست برای این نماد
+            wins, losses = self._analyze_backtest_results(symbol)
+            backtest_results[symbol] = {
+                "initial_balance": initial_balance,
+                "final_balance": self.balance[symbol],
+                "profit_loss": self.balance[symbol] - initial_balance,
+                "profit_percent": ((self.balance[symbol] / initial_balance) - 1) * 100,
+                "total_trades": len(self.trades_log),
+                "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0
+            }
+            
+            # نمایش نتایج
+            self._print_backtest_results(symbol, backtest_results[symbol])
+            
+            # ذخیره تاریخچه معاملات
+            if self.trades_log:
+                pd.DataFrame(self.trades_log).to_csv(f"backtest_{symbol}_trades.csv", index=False)
+        
+        print("\n===== Overall Backtest Summary =====")
+        total_profit = sum(r["profit_loss"] for r in backtest_results.values())
+        avg_win_rate = sum(r["win_rate"] for r in backtest_results.values()) / len(backtest_results) if backtest_results else 0
+        
+        print(f"Total profit across all symbols: ${total_profit:.2f}")
+        print(f"Average win rate: {avg_win_rate:.2f}%")
+        
+        return backtest_results
+
+    def _get_historical_data(self, symbol, start_date, end_date):
+        """دریافت داده‌های تاریخی برای بک‌تست"""
+        try:
+            conn = sqlite3.connect("data/market_data.db")
+            query = """
+            SELECT * FROM candles 
+            WHERE symbol = ? 
+            AND datetime(timestamp, 'unixepoch') BETWEEN ? AND ?
+            ORDER BY timestamp
+            """
+            df = pd.read_sql(query, conn, params=[symbol, start_date, end_date])
+            conn.close()
+            return df
+        except Exception as e:
+            print(f"Error getting historical data: {e}")
+            return None
+
+    def _open_position(self, symbol, direction, price, timestamp=None):
+        """باز کردن پوزیشن جدید (با پشتیبانی از timestamp برای بک‌تست)"""
+        print(f"Opening {direction} position for {symbol} at {price}")
+        
+        self.positions[symbol] = direction
+        self.entry_price[symbol] = price
+        self.qty_left[symbol] = 1.0
+        self.tp_idx[symbol] = 0
+        
+        if direction == "LONG":
+            self.sl_price[symbol] = price * (1 - SL_PCT)
+            self.tp_prices[symbol] = [price * (1 + tp) for tp in TP_STEPS]
+        else:  # SHORT
+            self.sl_price[symbol] = price * (1 + SL_PCT)
+            self.tp_prices[symbol] = [price * (1 - tp) for tp in TP_STEPS]
+        
+        # ثبت در لاگ معاملات
+        self.trades_log.append({
+            'symbol': symbol,
+            'type': 'ENTRY',
+            'side': direction,
+            'price': price,
+            'balance': self.balance[symbol],
+            'timestamp': timestamp or time.time()
+        })
+        
+        # ذخیره لاگ معاملات
+        self._save_trades_log()
+
+    def _manage_positions(self, symbol, price_now, timestamp=None):
+        """مدیریت پوزیشن‌های فعلی (TP/SL) - با پشتیبانی از timestamp برای بک‌تست"""
+        if self.positions[symbol] == "LONG":
+            # چک SL
+            if price_now <= self.sl_price[symbol]:
+                self._close_position(symbol, price_now, "SL", timestamp)
+            
+            # چک TP
+            elif self.tp_idx[symbol] < len(self.tp_prices[symbol]) and price_now >= self.tp_prices[symbol][self.tp_idx[symbol]]:
+                self._take_profit(symbol, price_now, timestamp)
+                
+        elif self.positions[symbol] == "SHORT":
+            # چک SL
+            if price_now >= self.sl_price[symbol]:
+                self._close_position(symbol, price_now, "SL", timestamp)
+            
+            # چک TP
+            elif self.tp_idx[symbol] < len(self.tp_prices[symbol]) and price_now <= self.tp_prices[symbol][self.tp_idx[symbol]]:
+                self._take_profit(symbol, price_now, timestamp)
+
+    def _close_position(self, symbol, price, reason, timestamp=None):
+        """بستن کامل پوزیشن - با پشتیبانی از timestamp برای بک‌تست"""
+        direction = self.positions[symbol]
+        
+        if reason == "SL":
+            # محاسبه زیان
+            pnl = -self.balance[symbol] * self.qty_left[symbol] * SL_PCT
+            fee = abs(pnl) * 0.001
+            self.balance[symbol] += pnl - fee
+            
+            # ثبت در لاگ
+            self.trades_log.append({
+                'symbol': symbol,
+                'type': reason,
+                'side': direction,
+                'entry_price': self.entry_price[symbol],
+                'exit_price': price,
+                'qty': self.qty_left[symbol],
+                'pnl': pnl,
+                'fee': fee,
+                'balance': self.balance[symbol],
+                'timestamp': timestamp or time.time()
+            })
+            
+        # ریست وضعیت
+        self.positions[symbol] = None
+        self.qty_left[symbol] = 1.0
+        self._save_trades_log()
+
+    def _take_profit(self, symbol, price, timestamp=None):
+        """برداشت سود در نقطه TP - با پشتیبانی از timestamp برای بک‌تست"""
+        tp_qty = TP_QTYS[self.tp_idx[symbol]]
+        direction = self.positions[symbol]
+        
+        # محاسبه سود
+        pnl = self.balance[symbol] * tp_qty * TP_STEPS[self.tp_idx[symbol]]
+        fee = abs(pnl) * 0.001
+        self.balance[symbol] += pnl - fee
+        
+        # ثبت در لاگ
+        self.trades_log.append({
+            'symbol': symbol,
+            'type': f'TP{self.tp_idx[symbol]+1}',
+            'side': direction,
+            'entry_price': self.entry_price[symbol],
+            'exit_price': price,
+            'qty': tp_qty,
+            'pnl': pnl,
+            'fee': fee,
+            'balance': self.balance[symbol],
+            'timestamp': timestamp or time.time()
+        })
+        
+        # بروزرسانی مقدار باقی‌مانده
+        self.qty_left[symbol] -= tp_qty
+        self.tp_idx[symbol] += 1
+        
+        # اگر پوزیشن کامل بسته شده
+        if self.qty_left[symbol] <= 0 or self.tp_idx[symbol] >= len(self.tp_prices[symbol]):
+            self.positions[symbol] = None
+            self.qty_left[symbol] = 1.0
+        
+        self._save_trades_log()
+
+    def _print_backtest_status(self, symbol):
+        """نمایش وضعیت فعلی بک‌تست"""
+        trades_count = len([t for t in self.trades_log if t['symbol'] == symbol])
+        win_trades = len([t for t in self.trades_log if t['symbol'] == symbol and t.get('pnl', 0) > 0])
+        
+        print(f"\n--- {symbol} Backtest Status ---")
+        print(f"Current balance: ${self.balance[symbol]:.2f}")
+        print(f"Trades so far: {trades_count}")
+        print(f"Win rate: {(win_trades/trades_count*100) if trades_count > 0 else 0:.2f}%")
+        if self.positions[symbol]:
+            print(f"Current position: {self.positions[symbol]}")
+            print(f"Entry price: {self.entry_price[symbol]}")
+        print("----------------------------\n")
+
+    def _analyze_backtest_results(self, symbol):
+        """تحلیل نتایج بک‌تست"""
+        wins = len([t for t in self.trades_log if t['symbol'] == symbol and t.get('pnl', 0) > 0])
+        losses = len([t for t in self.trades_log if t['symbol'] == symbol and t.get('pnl', 0) < 0])
+        return wins, losses
+
+    def _print_backtest_results(self, symbol, results):
+        """نمایش نتایج بک‌تست"""
+        print(f"\n========== {symbol} Backtest Results ==========")
+        print(f"Initial balance: ${results['initial_balance']:.2f}")
+        print(f"Final balance: ${results['final_balance']:.2f}")
+        print(f"Total P/L: ${results['profit_loss']:.2f} ({results['profit_percent']:.2f}%)")
+        print(f"Total trades: {results['total_trades']}")
+        print(f"Win rate: {results['win_rate']*100:.2f}%")
+        print("=" * 45)
 
 
 if __name__ == "__main__":
