@@ -604,12 +604,12 @@ class SmartTraderCLI:
                 port=DB_CONFIG["port"]
             )
             
-            # کوئری برای دریافت اخبار
+            # استفاده از published_at به جای timestamp
             query = """
             SELECT * FROM news 
             WHERE symbol = %s 
-            AND timestamp BETWEEN %s AND %s 
-            ORDER BY timestamp
+            AND published_at BETWEEN FROM_UNIXTIME(%s) AND FROM_UNIXTIME(%s)
+            ORDER BY published_at
             """
             
             # اجرای کوئری
@@ -617,25 +617,17 @@ class SmartTraderCLI:
             conn.close()
             
             if df.empty:
+                print(f"No news found for {symbol} in the given time period")
                 # برگرداندن DataFrame خالی با ستون‌های مورد نیاز
-                return pd.DataFrame(columns=['symbol', 'timestamp', 'title', 'content', 'sentiment_score', 'published_at'])
+                return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
                     
-            # تبدیل ستون timestamp به datetime
-            if 'timestamp' in df.columns:
-                df['published_at'] = pd.to_datetime(df['timestamp'], unit='s')
-                
-            # اگر sentiment_score وجود نداشت، مقدار خنثی (صفر) اضافه کن
-            if 'sentiment_score' not in df.columns:
-                df['sentiment_score'] = 0.0
-                
             return df
                 
         except Exception as e:
             print(f"Error getting historical news: {e}")
             import traceback
             print(traceback.format_exc())
-            # برگرداندن DataFrame خالی با ستون‌های مورد نیاز
-            return pd.DataFrame(columns=['symbol', 'timestamp', 'title', 'content', 'sentiment_score', 'published_at'])
+            return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
 
     def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
         """دانلود داده‌های تاریخی برای بک‌تست و ذخیره در MySQL"""
