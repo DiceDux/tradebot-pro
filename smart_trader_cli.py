@@ -463,6 +463,8 @@ class SmartTraderCLI:
             print(f"\n===== Backtesting {symbol} from {start_date} to {end_date} =====")
             
             # تنظیم مجدد متغیرهای حساب برای بک‌تست
+            # دانلود داده‌های تاریخی جدید
+            self._download_historical_data_for_backtest(symbol, start_date, end_date)
             self.balance[symbol] = initial_balance
             self.positions[symbol] = None
             self.trades_log = []
@@ -562,25 +564,146 @@ class SmartTraderCLI:
         
         return backtest_results
 
-    def _get_historical_data(self, symbol, start_date, end_date):
-        """دریافت داده‌های تاریخی برای بک‌تست"""
+    def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
+        """دانلود داده‌های تاریخی برای بک‌تست و ذخیره در MySQL"""
+        print(f"Downloading historical data for {symbol} from {start_date} to {end_date}...")
+        
+        # تبدیل تاریخ‌ها به timestamp
+        start_ts = int(pd.to_datetime(start_date).timestamp() * 1000)
+        end_ts = int(pd.to_datetime(end_date).timestamp() * 1000)
+        
         try:
-            # ابتدا بررسی کنیم که داده‌های کافی در دیتابیس هست یا نه
-            candles = get_latest_candles(symbol, limit=1000)
-            if candles is None or candles.empty:
-                print(f"No historical data available for {symbol} in database")
+            # دانلود داده‌های تاریخی از بایننس (مثلاً 4 ساعته)
+            from binance.client import Client
+            client = Client("", "")  # کلید‌های API اختیاری هستند برای داده‌های تاریخی
+            
+            # دانلود داده‌ها در چند بخش (هر بخش 1000 کندل)
+            all_candles = []
+            current_ts = start_ts
+            
+            while current_ts < end_ts:
+                klines = client.get_historical_klines(
+                    symbol=symbol, 
+                    interval=Client.KLINE_INTERVAL_4HOUR,
+                    start_str=current_ts,
+                    end_str=end_ts,
+                    limit=1000
+                )
+                
+                if not klines:
+                    break
+                    
+                print(f"Downloaded {len(klines)} candles")
+                all_candles.extend(klines)
+                
+                # آخرین timestamp دریافت شده + 1 برای دریافت بخش بعدی
+                current_ts = klines[-1][0] + 1
+                
+            # تبدیل به DataFrame
+            df = pd.DataFrame(all_candles, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades_count', 'taker_buy_volume',
+                'taker_buy_quote_volume', 'ignored'
+            ])
+            
+            # تبدیل انواع داده
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 
+                            'trades_count', 'taker_buy_volume', 'taker_buy_quote_volume']
+            df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
+            
+            # تبدیل timestamp از میلی‌ثانیه به ثانیه
+            df['timestamp'] = df['timestamp'].apply(lambda x: int(x / 1000))
+            df['symbol'] = symbol
+            
+            # ذخیره در MySQL
+            print(f"Saving {len(df)} candles to MySQL database")
+            
+            import pymysql
+            from utils.config import DB_CONFIG
+            
+            # اتصال به MySQL
+            conn = pymysql.connect(
+                host=DB_CONFIG["host"],
+                user=DB_CONFIG["user"],
+                password=DB_CONFIG["password"],
+                database=DB_CONFIG["database"],
+                port=DB_CONFIG["port"]
+            )
+            
+            cursor = conn.cursor()
+            
+            # بررسی ساختار جدول
+            cursor.execute("SHOW COLUMNS FROM candles")
+            columns = [col[0] for col in cursor.fetchall()]
+            
+            # فقط ستون‌های موجود در جدول را انتخاب می‌کنیم
+            df_columns = [col for col in df.columns if col in columns]
+            df_filtered = df[df_columns]
+            
+            # ذخیره هر رکورد
+            for _, row in df_filtered.iterrows():
+                placeholders = ", ".join(["%s"] * len(df_columns))
+                columns_str = ", ".join(df_columns)
+                
+                # بررسی وجود تکراری
+                check_query = f"SELECT COUNT(*) FROM candles WHERE symbol = %s AND timestamp = %s"
+                cursor.execute(check_query, (row['symbol'], row['timestamp']))
+                count = cursor.fetchone()[0]
+                
+                if count == 0:
+                    # اگر تکراری نبود، اضافه کن
+                    insert_query = f"INSERT INTO candles ({columns_str}) VALUES ({placeholders})"
+                    cursor.execute(insert_query, tuple(row[col] for col in df_columns))
+            
+            conn.commit()
+            conn.close()
+            print(f"Data saved successfully!")
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error downloading historical data: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+
+    def _get_historical_data(self, symbol, start_date, end_date):
+        """دریافت داده‌های تاریخی برای بک‌تست از MySQL"""
+        try:
+            import pymysql
+            from utils.config import DB_CONFIG
+            
+            # تبدیل تاریخ به timestamp
+            start_ts = int(pd.to_datetime(start_date).timestamp())
+            end_ts = int(pd.to_datetime(end_date).timestamp())
+            
+            # اتصال به MySQL
+            conn = pymysql.connect(
+                host=DB_CONFIG["host"],
+                user=DB_CONFIG["user"],
+                password=DB_CONFIG["password"],
+                database=DB_CONFIG["database"],
+                port=DB_CONFIG["port"]
+            )
+            
+            # کوئری برای دریافت داده‌های تاریخی با محدوده زمانی
+            query = """
+            SELECT * FROM candles
+            WHERE symbol = %s
+            AND timestamp BETWEEN %s AND %s
+            ORDER BY timestamp
+            """
+            
+            # اجرای کوئری با pandas
+            df = pd.read_sql(query, conn, params=[symbol, start_ts, end_ts])
+            conn.close()
+            
+            if df.empty:
+                print(f"No historical data found for {symbol} between {start_date} and {end_date}")
                 return None
                 
-            # تبدیل timestamp به datetime برای فیلتر کردن
-            candles['datetime'] = pd.to_datetime(candles['timestamp'], unit='s')
-            
-            # فیلتر کردن بر اساس محدوده زمانی
-            start_dt = pd.to_datetime(start_date)
-            end_dt = pd.to_datetime(end_date)
-            filtered_candles = candles[(candles['datetime'] >= start_dt) & (candles['datetime'] <= end_dt)]
-            
-            print(f"Found {len(filtered_candles)} candles between {start_date} and {end_date}")
-            return filtered_candles
+            print(f"Found {len(df)} candles between {start_date} and {end_date}")
+            return df
             
         except Exception as e:
             print(f"Error getting historical data: {e}")
