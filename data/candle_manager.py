@@ -34,16 +34,29 @@ def save_candles_to_db(candles):
         conn.close()
 
 def keep_last_200_candles(symbol):
-    conn = pymysql.connect(**DB_CONFIG)
+    """
+    فقط بررسی تعداد کندل‌ها بدون حذف هیچ داده‌ای
+    """
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                DELETE FROM candles WHERE symbol=%s AND timestamp NOT IN (
-                    SELECT timestamp FROM (
-                        SELECT timestamp FROM candles WHERE symbol=%s ORDER BY timestamp DESC LIMIT 200
-                    ) t
-                )
-            """, (symbol, symbol))
-            conn.commit()
-    finally:
+        from utils.config import DB_CONFIG
+        import pymysql
+        
+        conn = pymysql.connect(
+            host=DB_CONFIG["host"],
+            user=DB_CONFIG["user"],
+            password=DB_CONFIG["password"],
+            database=DB_CONFIG["database"],
+            port=DB_CONFIG["port"]
+        )
+        
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM candles WHERE symbol = %s", (symbol,))
+        count = cursor.fetchone()[0]
         conn.close()
+        
+        print(f"Symbol {symbol} has {count} historical candles in database")
+        return count
+        
+    except Exception as e:
+        print(f"Error in keep_last_200_candles: {e}")
+        return 0
