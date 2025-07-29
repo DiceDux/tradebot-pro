@@ -458,7 +458,7 @@ class SmartTraderCLI:
         print("Running backtest on historical data...")
         
         # تنظیم پارامترهای بک‌تست
-        start_date = "2018-01-01"  # از ابتدای 2021 (3 سال به جای 2.5 سال)
+        start_date = "2018-01-01"  # از ابتدای 2018
         end_date = "2025-07-28"    # تا دیروز
         initial_balance = 1000.0  # سرمایه اولیه برای هر نماد
         
@@ -468,8 +468,6 @@ class SmartTraderCLI:
             print(f"\n===== Backtesting {symbol} from {start_date} to {end_date} =====")
             
             # تنظیم مجدد متغیرهای حساب برای بک‌تست
-            # دانلود داده‌های تاریخی جدید
-            self._download_historical_data_for_backtest(symbol, start_date, end_date)
             self.balance[symbol] = initial_balance
             self.positions[symbol] = None
             self.trades_log = []
@@ -486,28 +484,36 @@ class SmartTraderCLI:
             total_candles = len(historical_candles)
             lookback = 100  # تعداد شمع‌های قبلی برای تحلیل
             
-            for i in range(lookback, total_candles):
-                if i % 50 == 0:
-                    print(f"Processing candle {i}/{total_candles} ({(i/total_candles*100):.1f}%)")
+            # اطمینان از وجود کندل‌های کافی برای تحلیل
+            if total_candles <= lookback:
+                print(f"Not enough candles for {symbol} (need at least {lookback+1})")
+                continue
                 
+            # نمایش وضعیت اولیه
+            first_candle = historical_candles.iloc[lookback]
+            first_time = pd.to_datetime(first_candle['timestamp'], unit='s')
+            first_price = first_candle['close']
+            self._print_backtest_status(symbol, lookback, total_candles, first_time, first_price)
+            
+            # شروع بک‌تست
+            for i in range(lookback, total_candles):
                 # شبیه‌سازی شرایط فعلی بازار با دیتای تاریخی
                 current_candle = historical_candles.iloc[i]
                 current_time = pd.to_datetime(current_candle['timestamp'], unit='s')
-                
-                # آخرین قیمت در این لحظه زمانی
-                current_price = current_candle['close']
+                current_price = float(current_candle['close'])
                 self.latest_prices[symbol] = current_price
                 
                 # فقط اگر پوزیشن فعال نداریم، تحلیل انجام می‌دهیم
                 if self.positions[symbol] is None:
                     # گرفتن بخشی از داده‌های تاریخی تا این لحظه
-                    candles_slice = historical_candles.iloc[i-lookback:i+1]
+                    candles_slice = historical_candles.iloc[i-lookback:i+1].copy()
                     
-                    # شبیه‌سازی اخبار (یا می‌توانیم از دیتاست واقعی اخبار استفاده کنیم)
-                    dummy_news = pd.DataFrame()
+                    # دریافت اخبار مرتبط تا این لحظه زمانی
+                    current_timestamp = current_candle['timestamp']
+                    news = self._get_historical_news(symbol, current_timestamp - (lookback * 4 * 3600), current_timestamp)
                     
-                    # شبیه‌سازی ساخت فیچرها
-                    features = build_features(candles_slice, dummy_news, symbol)
+                    # ساخت فیچرها با اخبار واقعی
+                    features = build_features(candles_slice, news, symbol)
                     if isinstance(features, pd.DataFrame):
                         features_dict = features.iloc[0].to_dict()
                     else:
@@ -538,9 +544,9 @@ class SmartTraderCLI:
                 # مدیریت TP/SL
                 self._manage_positions(symbol, current_price, current_time.timestamp())
                 
-                # هر 500 شمع وضعیت را نمایش بده
-                if i % 500 == 0 and i > 0:
-                    self._print_backtest_status(symbol)
+                # به‌روزرسانی نمایش وضعیت
+                if i % 20 == 0 or i == lookback or i == total_candles-1:
+                    self._print_backtest_status(symbol, i, total_candles, current_time, current_price)
             
             # آنالیز نتایج بک‌تست برای این نماد
             wins, losses = self._analyze_backtest_results(symbol)
@@ -558,14 +564,21 @@ class SmartTraderCLI:
             
             # ذخیره تاریخچه معاملات
             if self.trades_log:
-                pd.DataFrame(self.trades_log).to_csv(f"backtest_{symbol}_trades.csv", index=False)
+                trades_df = pd.DataFrame(self.trades_log)
+                
+                # اضافه کردن ستون datetime برای خوانایی بیشتر
+                if 'timestamp' in trades_df.columns:
+                    trades_df['datetime'] = pd.to_datetime(trades_df['timestamp'], unit='s')
+                
+                trades_df.to_csv(f"backtest_{symbol}_trades.csv", index=False)
+                print(f"Saved trade history to backtest_{symbol}_trades.csv")
         
         print("\n===== Overall Backtest Summary =====")
         total_profit = sum(r["profit_loss"] for r in backtest_results.values())
         avg_win_rate = sum(r["win_rate"] for r in backtest_results.values()) / len(backtest_results) if backtest_results else 0
         
         print(f"Total profit across all symbols: ${total_profit:.2f}")
-        print(f"Average win rate: {avg_win_rate:.2f}%")
+        print(f"Average win rate: {avg_win_rate*100:.2f}%")
         
         return backtest_results
 
