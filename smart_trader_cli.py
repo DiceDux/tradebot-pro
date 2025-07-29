@@ -32,6 +32,11 @@ CANDLE_LIMIT = 200
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
 
 class SmartTraderCLI:
+    def _clear_last_lines(self, n=6):
+        """پاک کردن چند خط قبلی در ترمینال"""
+        for _ in range(n):
+            print("\033[A\033[K", end='')  # بالا رفتن یک خط و پاک کردن آن
+            
     """نسخه خط فرمان ربات معامله‌گر هوشمند"""
     def __init__(self):
         self.base_model = EnhancedBaseModel()
@@ -564,6 +569,46 @@ class SmartTraderCLI:
         
         return backtest_results
 
+    def _get_historical_news(self, symbol, start_ts, end_ts):
+        """دریافت اخبار تاریخی برای بک‌تست"""
+        try:
+            import pymysql
+            from utils.config import DB_CONFIG
+            
+            # اتصال به MySQL
+            conn = pymysql.connect(
+                host=DB_CONFIG["host"],
+                user=DB_CONFIG["user"],
+                password=DB_CONFIG["password"],
+                database=DB_CONFIG["database"],
+                port=DB_CONFIG["port"]
+            )
+            
+            # کوئری برای دریافت اخبار
+            query = """
+            SELECT * FROM news 
+            WHERE symbol = %s 
+            AND timestamp BETWEEN %s AND %s 
+            ORDER BY timestamp
+            """
+            
+            # اجرای کوئری
+            df = pd.read_sql(query, conn, params=[symbol, start_ts, end_ts])
+            conn.close()
+            
+            if df.empty:
+                return pd.DataFrame()
+                
+            # تبدیل ستون timestamp به datetime
+            if 'timestamp' in df.columns:
+                df['published_at'] = pd.to_datetime(df['timestamp'], unit='s')
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error getting historical news: {e}")
+            return pd.DataFrame()
+
     def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
         """دانلود داده‌های تاریخی برای بک‌تست و ذخیره در MySQL"""
         print(f"Downloading historical data for {symbol} from {start_date} to {end_date}...")
@@ -824,19 +869,44 @@ class SmartTraderCLI:
         
         self._save_trades_log()
 
-    def _print_backtest_status(self, symbol):
-        """نمایش وضعیت فعلی بک‌تست"""
+    def _print_backtest_status(self, symbol, i=0, total=0, current_time=None, current_price=0):
+        """نمایش وضعیت فعلی بک‌تست با بروزرسانی در جای ثابت"""
         trades_count = len([t for t in self.trades_log if t['symbol'] == symbol])
         win_trades = len([t for t in self.trades_log if t['symbol'] == symbol and t.get('pnl', 0) > 0])
+        loss_trades = len([t for t in self.trades_log if t['symbol'] == symbol and t.get('pnl', 0) < 0])
         
-        print(f"\n--- {symbol} Backtest Status ---")
-        print(f"Current balance: ${self.balance[symbol]:.2f}")
-        print(f"Trades so far: {trades_count}")
+        # پاک کردن نمایش قبلی
+        if hasattr(self, 'last_status_lines'):
+            self._clear_last_lines(self.last_status_lines)
+        
+        # نمایش وضعیت
+        print("\n" + "="*50)
+        print(f"BACKTEST STATUS: {symbol} - {datetime.now().strftime('%H:%M:%S')}")
+        print("="*50)
+        
+        if i > 0 and total > 0:
+            progress = i / total * 100
+            print(f"Progress: {i}/{total} candles ({progress:.1f}%)")
+        
+        if current_time:
+            print(f"Current date: {current_time.strftime('%Y-%m-%d %H:%M')} - Price: ${current_price:.2f}")
+        
+        print(f"Balance: ${self.balance[symbol]:.2f}")
+        print(f"Trades: {trades_count} (Win: {win_trades}, Loss: {loss_trades})")
         print(f"Win rate: {(win_trades/trades_count*100) if trades_count > 0 else 0:.2f}%")
+        
         if self.positions[symbol]:
-            print(f"Current position: {self.positions[symbol]}")
-            print(f"Entry price: {self.entry_price[symbol]}")
-        print("----------------------------\n")
+            print(f"Active position: {self.positions[symbol]}")
+            print(f"Entry: ${self.entry_price[symbol]:.2f} | SL: ${self.sl_price[symbol]:.2f}")
+            print(f"TPs: {[f'${tp:.2f}' for tp in self.tp_prices[symbol]]}")
+            print(f"Current TP: {self.tp_idx[symbol]+1}/{len(TP_STEPS)} | Qty left: {self.qty_left[symbol]:.2f}")
+        else:
+            print("No active position")
+        
+        print("="*50)
+        
+        # تعداد خطوط چاپ شده را ذخیره می‌کنیم
+        self.last_status_lines = 12 if self.positions[symbol] else 9
 
     def _analyze_backtest_results(self, symbol):
         """تحلیل نتایج بک‌تست"""
