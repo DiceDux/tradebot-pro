@@ -10,6 +10,8 @@ from datetime import datetime
 import threading
 import argparse
 import sqlite3
+import warnings
+import logging
 
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news
@@ -30,6 +32,28 @@ THRESHOLD = 0.7
 CANDLE_LIMIT = 200
 
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
+
+# تنظیم مسیر لاگ‌ها
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+# ایجاد فایل لاگ با تاریخ و زمان
+log_file = os.path.join(log_dir, f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+# تنظیم لاگر
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+
+# غیرفعال کردن هشدارهای تکراری پانداس و نامپای
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="numpy")
 
 class SmartTraderCLI:
     def _clear_last_lines(self, n=6):
@@ -457,17 +481,30 @@ class SmartTraderCLI:
     def run_backtest(self):
         """اجرای بک‌تست روی داده‌های تاریخی"""
         self.initialize()
-        print("Running backtest on historical data...")
+        logging.info("Running backtest on historical data...")
         
         # تنظیم پارامترهای بک‌تست
         start_date = "2018-01-01"  # از ابتدای 2018
         end_date = "2025-07-28"    # تا دیروز
         initial_balance = 1000.0  # سرمایه اولیه برای هر نماد
         
+        # ایجاد فایل CSV برای ذخیره نتایج معاملات
+        backtest_trades_file = f"logs/backtest_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # ستون‌های فایل CSV معاملات
+        trades_columns = [
+            "timestamp", "datetime", "symbol", "type", "side", "price", 
+            "entry_price", "exit_price", "qty", "pnl", "balance", "reason"
+        ]
+        
+        # ایجاد فایل و نوشتن هدر
+        with open(backtest_trades_file, 'w') as f:
+            f.write(','.join(trades_columns) + '\n')
+            
         backtest_results = {}
         
         for symbol in SYMBOLS:
-            print(f"\n===== Backtesting {symbol} from {start_date} to {end_date} =====")
+            logging.info(f"\n===== Backtesting {symbol} from {start_date} to {end_date} =====")
             
             # تنظیم مجدد متغیرهای حساب برای بک‌تست
             self.balance[symbol] = initial_balance
@@ -477,10 +514,10 @@ class SmartTraderCLI:
             # دریافت داده‌های تاریخی
             historical_candles = self._get_historical_data(symbol, start_date, end_date)
             if historical_candles is None or historical_candles.empty:
-                print(f"No historical data available for {symbol}")
+                logging.error(f"No historical data available for {symbol}")
                 continue
-                
-            print(f"Loaded {len(historical_candles)} historical candles")
+                    
+            logging.info(f"Loaded {len(historical_candles)} historical candles")
             
             # اجرای بک‌تست روی هر شمع
             total_candles = len(historical_candles)
@@ -488,38 +525,39 @@ class SmartTraderCLI:
             
             # اطمینان از وجود کندل‌های کافی برای تحلیل
             if total_candles <= lookback:
-                print(f"Not enough candles for {symbol} (need at least {lookback+1})")
+                logging.error(f"Not enough candles for {symbol} (need at least {lookback+1})")
                 continue
-                
-            # نمایش وضعیت اولیه
-            first_candle = historical_candles.iloc[lookback]
-            first_time = pd.to_datetime(first_candle['timestamp'], unit='s')
-            first_price = float(first_candle['close'])
-            self._print_backtest_status(symbol, lookback, total_candles, first_time, first_price)
+            
+            # برای نمایش پیشرفت
+            progress_interval = max(1, total_candles // 100)
+            last_progress_shown = 0
             
             # شروع بک‌تست
             for i in range(lookback, total_candles):
+                # بررسی آیا باید پیشرفت را نمایش دهیم
+                show_progress = (i % 20 == 0) or (i == lookback) or (i == total_candles-1)
+                
                 # شبیه‌سازی شرایط فعلی بازار با دیتای تاریخی
                 current_candle = historical_candles.iloc[i]
                 current_time = pd.to_datetime(current_candle['timestamp'], unit='s')
                 current_price = float(current_candle['close'])
                 self.latest_prices[symbol] = current_price
                 
+                # نمایش پیشرفت بک‌تست هر درصد
+                current_progress = i * 100 // total_candles
+                if current_progress > last_progress_shown:
+                    logging.info(f"Processing: {current_progress}% complete... ({i}/{total_candles} candles)")
+                    last_progress_shown = current_progress
+                
                 # فقط اگر پوزیشن فعال نداریم، تحلیل انجام می‌دهیم
                 if self.positions[symbol] is None:
                     # گرفتن بخشی از داده‌های تاریخی تا این لحظه
                     candles_slice = historical_candles.iloc[i-lookback:i+1].copy()
                     
-                    # دریافت اخبار مرتبط تا این لحظه زمانی
+                    # دریافت اخبار مرتبط تا این لحظه زمانی (بدون لاگ کردن هر بار)
                     current_timestamp = current_candle['timestamp']
-                    # بازه زمانی برای دریافت اخبار (۷ روز قبل)
                     look_back_hours = 24 * 7  
                     news = self._get_historical_news(symbol, current_timestamp - (look_back_hours * 3600), current_timestamp)
-                    
-                    # لاگ برای تعداد اخبار (اختیاری)
-                    if i % 100 == 0:
-                        news_count = len(news) if news is not None and not news.empty else 0
-                        print(f"Found {news_count} news items for timestamp {current_time}")
                     
                     # ساخت فیچرها با اخبار واقعی
                     features = build_features(candles_slice, news, symbol)
@@ -547,15 +585,39 @@ class SmartTraderCLI:
                     if conf_value >= THRESHOLD:
                         if signal == "Buy":
                             self._open_position(symbol, "LONG", current_price, current_time.timestamp())
+                            logging.info(f"📈 LONG signal at {current_time} - Price: ${current_price:.2f}, Confidence: {conf_value:.2f}")
+                            show_progress = True  # همیشه وضعیت را هنگام معامله نمایش بده
                         elif signal == "Sell":
                             self._open_position(symbol, "SHORT", current_price, current_time.timestamp())
+                            logging.info(f"📉 SHORT signal at {current_time} - Price: ${current_price:.2f}, Confidence: {conf_value:.2f}")
+                            show_progress = True  # همیشه وضعیت را هنگام معامله نمایش بده
                 
                 # مدیریت TP/SL
+                position_before = self.positions[symbol]
                 self._manage_positions(symbol, current_price, current_time.timestamp())
+                position_after = self.positions[symbol]
                 
-                # به‌روزرسانی نمایش وضعیت
-                if i % 20 == 0 or i == lookback or i == total_candles-1:
+                # اگر پوزیشن تغییر کرده، نمایش بده
+                if position_before is not None and position_after is None:
+                    logging.info(f"Position closed at {current_time} - Price: ${current_price:.2f}")
+                    show_progress = True
+                
+                # به‌روزرسانی نمایش وضعیت در صورت لزوم
+                if show_progress:
                     self._print_backtest_status(symbol, i, total_candles, current_time, current_price)
+                
+                # نوشتن معاملات در فایل CSV
+                if len(self.trades_log) > 0:
+                    trade = self.trades_log[-1]
+                    if not hasattr(self, 'last_trade_index') or self.last_trade_index < len(self.trades_log) - 1:
+                        with open(backtest_trades_file, 'a') as f:
+                            trade_time = datetime.fromtimestamp(trade['timestamp'])
+                            f.write(f"{trade['timestamp']},{trade_time},{trade['symbol']},{trade['type']},"
+                                    f"{trade.get('side', '')},{trade.get('price', 0)},"
+                                    f"{trade.get('entry_price', 0)},{trade.get('exit_price', 0)},"
+                                    f"{trade.get('qty', 0)},{trade.get('pnl', 0)},"
+                                    f"{trade['balance']},{trade.get('reason', '')}\n")
+                        self.last_trade_index = len(self.trades_log) - 1
             
             # آنالیز نتایج بک‌تست برای این نماد
             wins, losses = self._analyze_backtest_results(symbol)
@@ -579,15 +641,15 @@ class SmartTraderCLI:
                 if 'timestamp' in trades_df.columns:
                     trades_df['datetime'] = pd.to_datetime(trades_df['timestamp'], unit='s')
                 
-                trades_df.to_csv(f"backtest_{symbol}_trades.csv", index=False)
-                print(f"Saved trade history to backtest_{symbol}_trades.csv")
+                trades_df.to_csv(f"logs/backtest_{symbol}_trades.csv", index=False)
+                logging.info(f"Saved trade history to logs/backtest_{symbol}_trades.csv")
         
-        print("\n===== Overall Backtest Summary =====")
+        logging.info("\n===== Overall Backtest Summary =====")
         total_profit = sum(r["profit_loss"] for r in backtest_results.values())
         avg_win_rate = sum(r["win_rate"] for r in backtest_results.values()) / len(backtest_results) if backtest_results else 0
         
-        print(f"Total profit across all symbols: ${total_profit:.2f}")
-        print(f"Average win rate: {avg_win_rate*100:.2f}%")
+        logging.info(f"Total profit across all symbols: ${total_profit:.2f}")
+        logging.info(f"Average win rate: {avg_win_rate*100:.2f}%")
         
         return backtest_results
 
@@ -627,18 +689,20 @@ class SmartTraderCLI:
             ORDER BY published_at
             """
             
-            # اجرای کوئری
-            df = pd.read_sql(query, conn, params=[symbol, start_ts, end_ts])
+            # اجرای کوئری (بدون نمایش هشدارها)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                df = pd.read_sql(query, conn, params=[symbol, start_ts, end_ts])
+            
             conn.close()
             
             if df.empty:
-                print(f"No news found for {symbol} in the given time period")
                 return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
                     
             return df
                 
         except Exception as e:
-            print(f"Error getting historical news: {e}")
+            logging.debug(f"Error getting historical news: {e}")
             return pd.DataFrame(columns=['symbol', 'title', 'content', 'sentiment_score', 'published_at'])
 
     def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
