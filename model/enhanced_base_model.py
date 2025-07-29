@@ -118,20 +118,34 @@ class EnhancedBaseModel:
             return None
     
     def predict(self, X):
-        """
-        پیش‌بینی با استفاده از مدل پایه
-        """
+        """پیش‌بینی کلاس، احتمالات و اطمینان"""
         if self.model is None:
-            raise ValueError("Model not trained or loaded")
+            raise ValueError("Model not loaded or trained!")
+            
+        if isinstance(X, pd.DataFrame):
+            # اطمینان از اینکه همه فیچرهای مورد نیاز وجود دارند
+            missing_features = set(self.feature_names) - set(X.columns)
+            if missing_features:
+                # اضافه کردن فیچرهای گم‌شده با مقدار 0
+                for f in missing_features:
+                    X[f] = 0
+            
+            # استفاده فقط از فیچرهای موجود در مدل
+            X = X[self.feature_names]
         
-        # اطمینان از وجود تمام فیچرها
-        X_valid = X.reindex(columns=self.feature_names, fill_value=0.0)
+        # پیش‌بینی
+        pred_proba = self.model.predict_proba(X)
         
-        # پیش‌بینی کلاس و احتمالات
-        pred_class = self.model.predict(X_valid)
-        pred_proba = self.model.predict_proba(X_valid)
+        # اطمینان از اینکه خروجی‌ها اسکالر هستند (برای رفع هشدار NumPy)
+        pred_class_idx = np.argmax(pred_proba, axis=1)
+        pred_class = np.array([int(idx) for idx in pred_class_idx])  # تبدیل صحیح به اسکالر
         
-        # محاسبه اطمینان (بالاترین احتمال)
-        confidence = np.max(pred_proba, axis=1)
+        # محاسبه اطمینان (تفاوت بین بیشترین و دومین احتمال)
+        confidences = []
+        for probs in pred_proba:
+            sorted_probs = np.sort(probs)
+            # اگر فقط یک کلاس با احتمال بالا وجود داشته باشد، اطمینان بالاست
+            confidence = sorted_probs[-1] - (sorted_probs[-2] if len(sorted_probs) > 1 else 0)
+            confidences.append(float(confidence))  # تبدیل به اسکالر
         
-        return pred_class, pred_proba, confidence
+        return pred_class, pred_proba, np.array(confidences)
