@@ -595,7 +595,7 @@ class SmartTraderCLI:
         """دانلود همه داده‌های تاریخی برای همه نمادها"""
         print("Downloading all historical data...")
         
-        start_date = "2017-01-01"  # از ابتدای 2017
+        start_date = "2021-01-01"  # از ابتدای 2017
         end_date = datetime.now().strftime('%Y-%m-%d')  # تا امروز
         
         for symbol in SYMBOLS:
