@@ -575,7 +575,7 @@ class SmartTraderCLI:
                     pred_class, pred_proba, confidence = self.base_model.predict(X_filtered)
                     
                     # تبدیل به مقادیر اسکالر
-                    class_idx = int(pred_class[0]) if isinstance(pred_class[0], (np.ndarray, np.generic)) else int(pred_class[0])
+                    class_idx = int(pred_class[0]) if hasattr(pred_class[0], 'item') else int(pred_class[0])
                     conf_value = float(confidence[0]) if isinstance(confidence[0], (np.ndarray, np.generic)) else float(confidence[0])
                     
                     signal_map = {0: "Sell", 1: "Hold", 2: "Buy"}
