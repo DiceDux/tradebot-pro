@@ -565,18 +565,27 @@ class SmartTraderCLI:
     def _get_historical_data(self, symbol, start_date, end_date):
         """دریافت داده‌های تاریخی برای بک‌تست"""
         try:
-            conn = sqlite3.connect("data/market_data.db")
-            query = """
-            SELECT * FROM candles 
-            WHERE symbol = ? 
-            AND datetime(timestamp, 'unixepoch') BETWEEN ? AND ?
-            ORDER BY timestamp
-            """
-            df = pd.read_sql(query, conn, params=[symbol, start_date, end_date])
-            conn.close()
-            return df
+            # ابتدا بررسی کنیم که داده‌های کافی در دیتابیس هست یا نه
+            candles = get_latest_candles(symbol, limit=1000)
+            if candles is None or candles.empty:
+                print(f"No historical data available for {symbol} in database")
+                return None
+                
+            # تبدیل timestamp به datetime برای فیلتر کردن
+            candles['datetime'] = pd.to_datetime(candles['timestamp'], unit='s')
+            
+            # فیلتر کردن بر اساس محدوده زمانی
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            filtered_candles = candles[(candles['datetime'] >= start_dt) & (candles['datetime'] <= end_dt)]
+            
+            print(f"Found {len(filtered_candles)} candles between {start_date} and {end_date}")
+            return filtered_candles
+            
         except Exception as e:
             print(f"Error getting historical data: {e}")
+            import traceback
+            print(traceback.format_exc())
             return None
 
     def _open_position(self, symbol, direction, price, timestamp=None):
