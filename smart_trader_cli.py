@@ -492,7 +492,7 @@ class SmartTraderCLI:
             # نمایش وضعیت اولیه
             first_candle = historical_candles.iloc[lookback]
             first_time = pd.to_datetime(first_candle['timestamp'], unit='s')
-            first_price = first_candle['close']
+            first_price = float(first_candle['close'])
             self._print_backtest_status(symbol, lookback, total_candles, first_time, first_price)
             
             # شروع بک‌تست
@@ -510,7 +510,14 @@ class SmartTraderCLI:
                     
                     # دریافت اخبار مرتبط تا این لحظه زمانی
                     current_timestamp = current_candle['timestamp']
-                    news = self._get_historical_news(symbol, current_timestamp - (lookback * 4 * 3600), current_timestamp)
+                    # بازه زمانی برای دریافت اخبار (۷ روز قبل)
+                    look_back_hours = 24 * 7  
+                    news = self._get_historical_news(symbol, current_timestamp - (look_back_hours * 3600), current_timestamp)
+                    
+                    # لاگ برای تعداد اخبار (اختیاری)
+                    if i % 100 == 0:
+                        news_count = len(news) if news is not None and not news.empty else 0
+                        print(f"Found {news_count} news items for timestamp {current_time}")
                     
                     # ساخت فیچرها با اخبار واقعی
                     features = build_features(candles_slice, news, symbol)
@@ -610,17 +617,25 @@ class SmartTraderCLI:
             conn.close()
             
             if df.empty:
-                return pd.DataFrame()
-                
+                # برگرداندن DataFrame خالی با ستون‌های مورد نیاز
+                return pd.DataFrame(columns=['symbol', 'timestamp', 'title', 'content', 'sentiment_score', 'published_at'])
+                    
             # تبدیل ستون timestamp به datetime
             if 'timestamp' in df.columns:
                 df['published_at'] = pd.to_datetime(df['timestamp'], unit='s')
-            
+                
+            # اگر sentiment_score وجود نداشت، مقدار خنثی (صفر) اضافه کن
+            if 'sentiment_score' not in df.columns:
+                df['sentiment_score'] = 0.0
+                
             return df
-            
+                
         except Exception as e:
             print(f"Error getting historical news: {e}")
-            return pd.DataFrame()
+            import traceback
+            print(traceback.format_exc())
+            # برگرداندن DataFrame خالی با ستون‌های مورد نیاز
+            return pd.DataFrame(columns=['symbol', 'timestamp', 'title', 'content', 'sentiment_score', 'published_at'])
 
     def _download_historical_data_for_backtest(self, symbol, start_date, end_date):
         """دانلود داده‌های تاریخی برای بک‌تست و ذخیره در MySQL"""
