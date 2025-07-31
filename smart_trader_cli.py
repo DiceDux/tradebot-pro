@@ -32,7 +32,7 @@ THRESHOLD = 0.0
 CANDLE_LIMIT = 200
 
 # تنظیمات اصلی
-BACKTEST_THRESHOLD = 0.3  # آستانه اعتماد برای بک‌تست
+BACKTEST_THRESHOLD = 0.0  # آستانه اعتماد برای بک‌تست
 LIVE_THRESHOLD = 0.4      # آستانه اعتماد برای لایو ترید
 COMMISSION_PCT = 0.002    # کارمزد 0.2%
 SLIPPAGE_PCT = 0.001      # لغزش قیمت 0.1%
