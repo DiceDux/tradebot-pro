@@ -9,8 +9,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 import logging
 
+# مسیرهای فایل با پشتیبانی از حالت‌های بک‌تست و لایو
 SELECTOR_PATH = "model/feature_selector.pkl"
-ACTIVE_FEATURES_PATH = "model/active_features.pkl"
+SELECTED_FEATURES_PATH_BACKTEST = "model/selected_features_backtest.pkl"
+SELECTED_FEATURES_PATH_LIVE = "model/selected_features_live.pkl"
 
 class AdaptiveFeatureSelector:
     """
@@ -25,8 +27,9 @@ class AdaptiveFeatureSelector:
         self.top_n = top_n
         self.backtest_update_seconds = backtest_update_hours * 3600
         self.live_update_seconds = live_update_hours * 3600
-        self.last_update_time = None
-        self.active_features = None
+        self.last_update_time_backtest = None
+        self.last_update_time_live = None
+        self.best_features = None
         
         # پارامترهای الگوریتم ژنتیک
         self.population_size = population_size
@@ -41,7 +44,8 @@ class AdaptiveFeatureSelector:
         self.combinations_evaluated = 0
         
         # فایل‌های ذخیره‌سازی
-        self.last_update_file = "model/last_feature_update.txt"
+        self.last_update_file_backtest = "model/last_feature_update_backtest.txt"
+        self.last_update_file_live = "model/last_feature_update_live.txt"
         self.feature_importance_file = "model/feature_importance.pkl"
         
         # تنظیم لاگر
@@ -54,63 +58,96 @@ class AdaptiveFeatureSelector:
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
-        
-        # بارگیری وضعیت قبلی اگر موجود باشد
+            
+        # بارگیری وضعیت قبلی
         self._load_state()
         
     def _load_state(self):
         """بارگیری وضعیت قبلی انتخاب فیچر"""
         try:
-            if os.path.exists(ACTIVE_FEATURES_PATH):
-                data = joblib.load(ACTIVE_FEATURES_PATH)
-                
-                if isinstance(data, dict):
-                    self.active_features = data.get('features', [])
-                    self.feature_importance = data.get('importance', {})
-                    self.combinations_evaluated = data.get('combinations_evaluated', 0)
-                    print(f"Loaded {len(self.active_features)} active features from disk")
-                else:
-                    self.active_features = data
-                    print(f"Loaded {len(self.active_features)} active features from disk (legacy format)")
-            
-            if os.path.exists(self.last_update_file):
-                with open(self.last_update_file, 'r') as f:
-                    last_update_str = f.read().strip()
-                    self.last_update_time = float(last_update_str)
-                    print(f"Last feature selection update: {datetime.fromtimestamp(self.last_update_time)}")
+            # بارگیری سلکتور اصلی
+            if os.path.exists(SELECTOR_PATH):
+                selector = joblib.load(SELECTOR_PATH)
+                if hasattr(selector, 'feature_importance'):
+                    self.feature_importance = selector.feature_importance
+                if hasattr(selector, 'combinations_evaluated'):
+                    self.combinations_evaluated = selector.combinations_evaluated
         except Exception as e:
-            print(f"Error loading selector state: {e}")
-            self.logger.error(f"Error loading selector state: {e}")
-    
-    def _save_state(self):
-        """ذخیره وضعیت فعلی انتخاب فیچر"""
-        try:
-            if not os.path.exists("model"):
-                os.makedirs("model")
-                
-            if self.active_features:
-                data = {
-                    'features': self.active_features,
-                    'importance': self.feature_importance,
-                    'combinations_evaluated': self.combinations_evaluated,
-                    'timestamp': datetime.now()
-                }
-                joblib.dump(data, ACTIVE_FEATURES_PATH)
+            self.logger.error(f"Error loading selector: {e}")
             
-            if self.last_update_time:
-                with open(self.last_update_file, 'w') as f:
-                    f.write(str(self.last_update_time))
+    def _load_features(self, is_backtest=True):
+        """بارگیری فیچرهای انتخاب شده برای حالت بک‌تست یا لایو"""
+        features_path = SELECTED_FEATURES_PATH_BACKTEST if is_backtest else SELECTED_FEATURES_PATH_LIVE
+        last_update_file = self.last_update_file_backtest if is_backtest else self.last_update_file_live
+        
+        try:
+            # بارگیری فیچرهای انتخاب شده
+            if os.path.exists(features_path):
+                loaded = joblib.load(features_path)
+                
+                # بررسی فرمت جدید (دیکشنری) در مقابل فرمت قدیمی (لیست)
+                if isinstance(loaded, dict):
+                    self.best_features = loaded.get('features', [])
+                    # بازیابی اهمیت فیچرها
+                    self.feature_importance = loaded.get('importance', {})
+                    self.combinations_evaluated = loaded.get('combinations_evaluated', 0)
+                    print(f"Loaded {len(self.best_features)} active features with importance values")
+                else:
+                    # فرمت قدیمی
+                    self.best_features = loaded
+                    print(f"Loaded {len(self.best_features)} active features from disk (legacy format)")
+            
+            # بارگیری زمان آخرین بروزرسانی
+            if os.path.exists(last_update_file):
+                with open(last_update_file, 'r') as f:
+                    last_update_str = f.read().strip()
+                    if is_backtest:
+                        self.last_update_time_backtest = float(last_update_str)
+                        print(f"Last feature selection update: {datetime.fromtimestamp(self.last_update_time_backtest)}")
+                    else:
+                        self.last_update_time_live = float(last_update_str)
+                        print(f"Last feature selection update: {datetime.fromtimestamp(self.last_update_time_live)}")
+            
+            return self.best_features
+                
+        except Exception as e:
+            self.logger.error(f"Error loading features: {e}")
+            return []
+    
+    def _save_features(self, is_backtest=True):
+        """ذخیره فیچرهای انتخاب شده برای حالت بک‌تست یا لایو"""
+        if not os.path.exists("model"):
+            os.makedirs("model")
+            
+        features_path = SELECTED_FEATURES_PATH_BACKTEST if is_backtest else SELECTED_FEATURES_PATH_LIVE
+        last_update_file = self.last_update_file_backtest if is_backtest else self.last_update_file_live
+        last_update_time = self.last_update_time_backtest if is_backtest else self.last_update_time_live
+        
+        try:
+            if self.best_features:
+                data_to_save = {
+                    'features': self.best_features,
+                    'timestamp': datetime.now(),
+                    'importance': self.feature_importance,
+                    'combinations_evaluated': self.combinations_evaluated
+                }
+                joblib.dump(data_to_save, features_path)
+                print(f"Saved {len(self.best_features)} selected features to {features_path}")
+            
+            if last_update_time:
+                with open(last_update_file, 'w') as f:
+                    f.write(str(last_update_time))
                     
             # ذخیره لیست فیچرها در فایل متنی برای خوانایی بیشتر
-            if self.active_features:
+            if self.best_features:
                 with open("model/selected_features.txt", "w") as f:
                     f.write(f"Updated: {datetime.now()}\n")
-                    f.write(f"Feature count: {len(self.active_features)}\n\n")
+                    f.write(f"Feature count: {len(self.best_features)}\n\n")
                     f.write("Selected Features:\n")
                     
                     # مرتب‌سازی بر اساس اهمیت
                     sorted_features = sorted(
-                        [(f, self.feature_importance.get(f, 0)) for f in self.active_features],
+                        [(f, self.feature_importance.get(f, 0)) for f in self.best_features],
                         key=lambda x: x[1],
                         reverse=True
                     )
@@ -119,20 +156,21 @@ class AdaptiveFeatureSelector:
                         f.write(f"{i+1}. {feature}: {importance:.6f}\n")
                 
         except Exception as e:
-            print(f"Error saving selector state: {e}")
-            self.logger.error(f"Error saving selector state: {e}")
+            self.logger.error(f"Error saving features: {e}")
     
     def _is_update_needed(self, is_backtest=True):
         """بررسی نیاز به بروزرسانی فیچرها"""
-        if self.last_update_time is None:
+        last_update_time = self.last_update_time_backtest if is_backtest else self.last_update_time_live
+        
+        if last_update_time is None:
             return True
         
-        time_passed = time.time() - self.last_update_time
+        time_passed = time.time() - last_update_time
         update_interval = self.backtest_update_seconds if is_backtest else self.live_update_seconds
         
         return time_passed > update_interval
     
-    def select_features(self, market_data, force_update=False, is_backtest=True):
+    def select_features(self, market_data=None, force_update=False, is_backtest=True):
         """
         انتخاب بهترین ترکیب فیچرها با استفاده از الگوریتم ژنتیک
         
@@ -144,10 +182,13 @@ class AdaptiveFeatureSelector:
         Returns:
             list: فیچرهای انتخاب‌شده
         """
+        # بارگیری فیچرهای قبلی اگر موجود هستند
+        self._load_features(is_backtest)
+        
         # اگر هنوز زمان بروزرسانی نرسیده و فیچرهای فعال داریم
-        if not force_update and not self._is_update_needed(is_backtest) and self.active_features:
+        if not force_update and not self._is_update_needed(is_backtest) and self.best_features:
             print("Using cached feature selection")
-            return self.active_features
+            return self.best_features
         
         print(f"Selecting optimal feature combination for {'backtest' if is_backtest else 'live trading'}...")
         self.logger.info(f"Starting feature selection for {'backtest' if is_backtest else 'live trading'}")
@@ -167,36 +208,41 @@ class AdaptiveFeatureSelector:
             self.logger.error(f"Error during feature selection: {e}")
             
             # اگر فیچرهای قبلی داریم، آنها را برگردانیم
-            if self.active_features:
-                return self.active_features
+            if self.best_features:
+                return self.best_features
             
             # در غیر این صورت، از روش ساده‌تر استفاده کنیم
             try:
-                self.active_features = self._fallback_feature_selection(market_data)
-            except:
+                self.best_features = self._fallback_feature_selection(market_data)
+            except Exception:
                 # اگر هیچ روشی کار نکرد، یک زیرمجموعه پیش‌فرض را برگردانیم
                 print("Using default features as fallback")
                 essential_features = ['close', 'open', 'high', 'low', 'volume', 'rsi', 'macd', 'ema20', 'ema50']
-                self.active_features = [f for f in essential_features if f in self.all_feature_names]
+                self.best_features = [f for f in essential_features if f in self.all_feature_names]
                 
                 # اضافه کردن فیچرهای دیگر تا رسیدن به top_n
-                remaining_features = [f for f in self.all_feature_names if f not in self.active_features]
-                needed = max(0, self.top_n - len(self.active_features))
+                remaining_features = [f for f in self.all_feature_names if f not in self.best_features]
+                needed = max(0, self.top_n - len(self.best_features))
                 if needed > 0 and remaining_features:
-                    self.active_features.extend(random.sample(remaining_features, min(needed, len(remaining_features))))
+                    self.best_features.extend(random.sample(remaining_features, min(needed, len(remaining_features))))
                 
         # بروزرسانی وضعیت
-        self.last_update_time = time.time()
-        self._save_state()
+        if is_backtest:
+            self.last_update_time_backtest = time.time()
+        else:
+            self.last_update_time_live = time.time()
+            
+        # ذخیره نتایج
+        self._save_features(is_backtest)
         
         duration = datetime.now() - start_time
         print(f"Feature selection completed in {duration.total_seconds()//60} minutes {duration.total_seconds()%60:.0f} seconds")
-        print(f"Selected {len(self.active_features)} features")
+        print(f"Selected {len(self.best_features)} features")
         
         # نمایش 10 فیچر برتر
         self._print_top_features(10)
         
-        return self.active_features
+        return self.best_features
     
     def _print_top_features(self, n=10):
         """نمایش فیچرهای برتر"""
@@ -286,9 +332,9 @@ class AdaptiveFeatureSelector:
                 X[feature] = 0
         
         # انتخاب فقط فیچرهای موجود در all_feature_names
-        X = X[self.all_feature_names]
+        X = X[[f for f in self.all_feature_names if f in X.columns]]
         
-        print(f"Prepared {len(X)} samples with {len(self.all_feature_names)} features")
+        print(f"Prepared {len(X)} samples with {X.shape[1]} features")
         
         return X, y
     
@@ -322,10 +368,10 @@ class AdaptiveFeatureSelector:
                 
                 # تبدیل به لیست فیچرها
                 selected_indices = [i for i, gene in enumerate(best_chromosome) if gene == 1]
-                self.active_features = [self.all_feature_names[i] for i in selected_indices]
+                self.best_features = [self.all_feature_names[i] for i in selected_indices]
                 
-                print(f"Generation {generation+1}: New best score {best_fitness:.4f} with {len(self.active_features)} features")
-                self.logger.info(f"Generation {generation+1}: New best score {best_fitness:.4f} with {len(self.active_features)} features")
+                print(f"Generation {generation+1}: New best score {best_fitness:.4f} with {len(self.best_features)} features")
+                self.logger.info(f"Generation {generation+1}: New best score {best_fitness:.4f} with {len(self.best_features)} features")
             
             # ایجاد نسل بعدی
             new_population = []
@@ -356,7 +402,7 @@ class AdaptiveFeatureSelector:
             print(f"Generation {generation+1}/{self.generations}: Avg fitness={avg_fitness:.4f}, Best fitness={gen_best_fitness:.4f}")
         
         # محاسبه اهمیت فیچرها با استفاده از بهترین ترکیب
-        if self.active_features:
+        if self.best_features:
             self._calculate_feature_importance(X, y)
     
     def _create_initial_population(self):
@@ -364,8 +410,8 @@ class AdaptiveFeatureSelector:
         population = []
         
         # افزودن کروموزوم فعال قبلی (اگر وجود دارد)
-        if self.active_features:
-            chromosome = [1 if feature in self.active_features else 0 for feature in self.all_feature_names]
+        if self.best_features:
+            chromosome = [1 if feature in self.best_features else 0 for feature in self.all_feature_names]
             population.append(chromosome)
         
         # ایجاد کروموزوم‌های تصادفی با تراکم‌های متفاوت
@@ -518,19 +564,37 @@ class AdaptiveFeatureSelector:
     def _calculate_feature_importance(self, X, y):
         """محاسبه اهمیت فیچرهای انتخاب شده"""
         try:
-            if not self.active_features:
+            if not self.best_features:
                 return
                 
-            X_selected = X[self.active_features]
+            # انتخاب فیچرهای موجود در دیتاست
+            available_features = [f for f in self.best_features if f in X.columns]
+            if not available_features:
+                self.logger.error("No features available for importance calculation")
+                return
+                
+            X_selected = X[available_features]
             
             # استفاده از Random Forest برای محاسبه اهمیت فیچرها
             model = RandomForestClassifier(n_estimators=100, random_state=42)
             model.fit(X_selected, y)
             
             importances = model.feature_importances_
-            self.feature_importance = dict(zip(self.active_features, importances))
             
-            self.logger.info("Feature importance calculated successfully")
+            # ذخیره اهمیت‌ها در دیکشنری
+            calculated_importance = dict(zip(available_features, importances))
+            
+            # ادغام با اهمیت‌های قبلی
+            for feature, importance in calculated_importance.items():
+                self.feature_importance[feature] = importance
+            
+            # برای فیچرهایی که در X نیستند، اهمیت صفر یا مقدار قبلی را حفظ می‌کنیم
+            for feature in self.best_features:
+                if feature not in available_features:
+                    self.feature_importance[feature] = self.feature_importance.get(feature, 0)
+                    
+            self.logger.info(f"Feature importance calculated for {len(available_features)} features")
+            
         except Exception as e:
             self.logger.error(f"Error calculating feature importance: {e}")
             print(f"Error calculating feature importance: {e}")
@@ -589,6 +653,9 @@ class AdaptiveFeatureSelector:
     def _get_market_variance(self, market_data):
         """محاسبه واریانس/تغییرات فیچرها در بازار فعلی"""
         result = {}
+        if market_data is None or market_data.empty:
+            return result
+            
         for feat in self.all_feature_names:
             if feat in market_data.columns:
                 result[feat] = market_data[feat].std()
@@ -597,6 +664,9 @@ class AdaptiveFeatureSelector:
     def _get_feature_correlation(self, market_data):
         """محاسبه همبستگی بین فیچرها (برای کاهش فیچرهای همبسته)"""
         result = {}
+        if market_data is None or market_data.empty:
+            return result
+            
         common_features = [f for f in self.all_feature_names if f in market_data.columns]
         
         if not common_features:
