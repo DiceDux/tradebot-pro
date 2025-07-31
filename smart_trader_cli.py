@@ -38,7 +38,9 @@ LIVE_THRESHOLD = 0.0      # آستانه اعتماد برای لایو ترید
 COMMISSION_PCT = 0.002    # کارمزد 0.2%
 SLIPPAGE_PCT = 0.001      # لغزش قیمت 0.1%
 
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
+NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "0f52f9deb686484db1fff6df6e0efa7c")
+#0f52f9deb686484db1fff6df6e0efa7c
+#ede1e0b0db7140fdbbd20f6f1b440cb9
 
 # تنظیم مسیر لاگ‌ها
 log_dir = "logs"
