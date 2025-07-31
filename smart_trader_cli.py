@@ -6,12 +6,13 @@ import numpy as np
 import time
 import joblib
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import argparse
 import sqlite3
 import warnings
 import logging
+
 
 from data.candle_manager import get_latest_candles, keep_last_200_candles
 from data.news_manager import get_latest_news
@@ -86,6 +87,46 @@ class SmartTraderCLI:
         # نگهداری قیمت‌های فعلی
         self.latest_prices = {symbol: 0.0 for symbol in SYMBOLS}
         
+    def _fetch_news_with_cache(self, symbol, limit=25, api_key=None):
+        """دریافت اخبار با سیستم کش برای کاهش تعداد درخواست‌ها"""
+        cache_dir = "cache"
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        
+        cache_file = f"{cache_dir}/news_{symbol}_cache.pkl"
+        
+        # اگر فایل کش وجود دارد و کمتر از 12 ساعت گذشته، از آن استفاده کن
+        if os.path.exists(cache_file):
+            cache_time = os.path.getmtime(cache_file)
+            if time.time() - cache_time < 12 * 3600:  # 12 ساعت
+                print(f"Using cached news for {symbol}")
+                try:
+                    return joblib.load(cache_file)
+                except:
+                    pass  # اگر خطایی رخ داد، API را فراخوانی کن
+        
+        # تلاش برای فراخوانی API
+        from data.fetch_online import fetch_news_newsapi
+        
+        try:
+            news = fetch_news_newsapi(symbol, limit, api_key)
+            if news:
+                # ذخیره در کش
+                joblib.dump(news, cache_file)
+            return news
+        except Exception as e:
+            print(f"Error fetching news, using cached data if available: {e}")
+            
+            # اگر فایل کش وجود دارد (حتی قدیمی)، از آن استفاده کن
+            if os.path.exists(cache_file):
+                try:
+                    return joblib.load(cache_file)
+                except:
+                    pass
+                    
+            # در غیر این صورت، یک لیست خالی برگردان
+            return []
+
     def initialize(self):
         """راه‌اندازی اولیه ربات"""
         print("Initializing Smart Trading Bot (CLI version)...")
@@ -126,6 +167,54 @@ class SmartTraderCLI:
         print("Smart Trading Bot initialized successfully!")
         return self
     
+    def prepare_missing_data(self):
+        """آماده‌سازی داده‌های ناقص و دانلود اطلاعات لازم"""
+        print("Preparing and filling missing data...")
+        
+        # ایجاد دایرکتوری کش
+        if not os.path.exists("cache"):
+            os.makedirs("cache")
+        
+        for symbol in SYMBOLS:
+            print(f"Processing {symbol}...")
+            
+            # 1. دریافت و ذخیره کندل‌های جدید
+            try:
+                candles = fetch_candles_binance(symbol, interval="4h", limit=500)
+                if candles and len(candles) > 0:
+                    save_candles_to_db(candles)
+                    print(f"Saved {len(candles)} new candles")
+                else:
+                    print("No new candles retrieved")
+            except Exception as e:
+                print(f"Error fetching candles: {e}")
+            
+            # 2. دریافت اخبار با استفاده از API یا کش
+            try:
+                # استفاده از روش کش برای کاهش فراخوانی API
+                news = self._fetch_news_with_cache(symbol, limit=50)
+                
+                # تحلیل احساسات اخبار
+                for n in news:
+                    if "sentiment_score" not in n or n["sentiment_score"] == 0:
+                        try:
+                            text = (n.get("title") or "") + " " + (n.get("content") or "")
+                            n["sentiment_score"] = analyze_sentiment_finbert(text)
+                        except:
+                            n["sentiment_score"] = 0.0
+                
+                if news:
+                    save_news_to_db(news)
+                    print(f"Saved {len(news)} news items")
+                else:
+                    print("No news retrieved")
+            except Exception as e:
+                print(f"Error processing news: {e}")
+                
+            time.sleep(1)  # کمی صبر کن تا از محدودیت API جلوگیری شود
+            
+        print("Data preparation completed!")
+
     def _display_selected_features(self):
         """نمایش فیچرهای انتخاب شده با اهمیت آنها"""
         if not hasattr(self, 'selected_features') or not self.selected_features:
@@ -292,10 +381,16 @@ class SmartTraderCLI:
         # فقط بررسی تعداد کندل‌ها - بدون حذف!
         keep_last_200_candles(symbol)
         
-        # دریافت اخبار
-        news = fetch_news_newsapi(symbol, limit=25, api_key=NEWSAPI_KEY)
+        # دریافت اخبار با استفاده از کش
+        news = self._fetch_news_with_cache(symbol, limit=25, api_key=NEWSAPI_KEY)
+        
+        # تحلیل احساسات اخبار
         for n in news:
-            n["sentiment_score"] = analyze_sentiment_finbert((n.get("title") or "") + " " + (n.get("content") or ""))
+            try:
+                n["sentiment_score"] = analyze_sentiment_finbert((n.get("title") or "") + " " + (n.get("content") or ""))
+            except:
+                n["sentiment_score"] = 0.0
+                
         save_news_to_db(news)
         
         print(f"Saved {len(candles)} candles and {len(news)} news items for {symbol}")
@@ -335,8 +430,25 @@ class SmartTraderCLI:
             print(f"Updated selected features to {len(self.selected_features)} features")
             logging.info(f"Updated selected features to {len(self.selected_features)} features")
         
+        # فیلتر کردن فیچرهای ناقص (صفر) در لایو ترید
+        active_features = []
+        for feature in self.selected_features:
+            value = features_dict.get(feature, 0.0)
+            if value != 0.0 or feature in ['close', 'open', 'high', 'low', 'volume']:
+                active_features.append(feature)
+        
+        # اگر تعداد فیچرهای غیر صفر کم است، فیچرهای اصلی را اضافه کن
+        if len(active_features) < 10:
+            essential_features = ['close', 'open', 'high', 'low', 'volume', 
+                                'ema20', 'ema50', 'rsi14', 'macd', 'stoch_k']
+            for f in essential_features:
+                if f in self.all_feature_names and f not in active_features:
+                    active_features.append(f)
+        
+        print(f"Using {len(active_features)} active non-zero features for analysis")
+        
         # استفاده از مدل پایه با فیچرهای منتخب
-        X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in self.selected_features})
+        X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in active_features})
         
         # پیش‌بینی با مدل پایه
         pred_class, pred_proba, confidence = self.base_model.predict(X_filtered)
@@ -669,8 +781,8 @@ class SmartTraderCLI:
         print(f"Using {len(self.selected_features)} optimized features for live trading")
         self._display_selected_features()
         
-        # تنظیم آستانه اعتماد برای لایو ترید
-        threshold = LIVE_THRESHOLD
+        # تنظیم آستانه اعتماد برای لایو ترید - استفاده از مقدار ثابت
+        threshold = LIVE_THRESHOLD  # استفاده از ثابت تعریف شده در بالای فایل
         print(f"Using confidence threshold of {threshold} for live trading")
         
         # شروع ترد آپدیت قیمت‌ها
@@ -699,17 +811,17 @@ class SmartTraderCLI:
                             if self.positions[symbol] is None:
                                 signal, confidence = self.analyze_market(symbol)
                                 
-                                # اضافه کردن اطلاعات دیباگ
+                                # چاپ اطلاعات دیباگ با فرمت مشخص
                                 print(f"DEBUG: {symbol} signal: {signal}, confidence: {confidence:.4f}, threshold: {threshold}")
                                 
                                 # اگر اطمینان کافی وجود دارد، معامله می‌کنیم
                                 if confidence >= threshold:
                                     if signal == "Buy":
                                         self._open_position(symbol, "LONG", price_now)
-                                        print(f"🚀 OPENED LONG position for {symbol} at ${price_now:.2f}")
+                                        print(f"OPENED LONG position for {symbol} at ${price_now:.2f}")
                                     elif signal == "Sell":
                                         self._open_position(symbol, "SHORT", price_now)
-                                        print(f"🔻 OPENED SHORT position for {symbol} at ${price_now:.2f}")
+                                        print(f"OPENED SHORT position for {symbol} at ${price_now:.2f}")
                             
                             # مدیریت TP/SL
                             self._manage_positions(symbol, price_now)
@@ -1296,14 +1408,19 @@ if __name__ == "__main__":
     parser.add_argument('--backtest', action='store_true', help='Run backtest instead of live trading')
     parser.add_argument('--live', action='store_true', help='Run live trading with optimized settings')
     parser.add_argument('--download_historical', action='store_true', help='Download all historical data for all symbols')
+    parser.add_argument('--prepare_data', action='store_true', help='Prepare and fill missing data')
     args = parser.parse_args()
     
     bot = SmartTraderCLI()
     if args.download_historical:
         print("Downloading all historical data...")
         bot.download_all_historical_data()
+    
+    elif args.prepare_data:
+        print("Preparing and filling missing data...")
+        bot.prepare_missing_data()
         
-    if args.train_base:
+    elif args.train_base:
         print("Training base model with all features...")
         bot._train_base_model()
     elif args.backtest:
