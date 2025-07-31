@@ -4,7 +4,7 @@ import mysql.connector
 from tabulate import tabulate
 import sys
 import os
-from feature_engineer import build_features
+from feature_engineering.feature_engineer import build_features
 from datetime import datetime
 
 # تنظیمات اتصال به MySQL
