@@ -96,6 +96,17 @@ def calculate_vwap(df):
     vwap = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
     return vwap.values[-1]
 
+def safe_pattern_value(pattern_func):
+    """دریافت امن مقدار آخرین الگوی شمعی"""
+    try:
+        result = pattern_func
+        if len(result) > 0:
+            return result[-1]
+        else:
+            return 0
+    except Exception:
+        return 0
+
 def build_features(candles_df, news_df, symbol):
     features = {}
     # --- رفع مشکل ts برای اخبار ---
@@ -391,37 +402,25 @@ def build_features(candles_df, news_df, symbol):
             else:
                 features['wick_ratio'] = 0.0
 
-        # ==== کندل پترن‌ها (talib) ====
+        # ==== کندل پترن‌ها (talib) - با استفاده از safe_pattern_value ====
         if talib is not None:
             if FEATURE_CONFIG.get('engulfing'):
-                if len(close) >= 2:
-                    features['engulfing'] = talib.CDLENGULFING(open_, high, low, close)[-1]
-                else:
-                    features['engulfing'] = 0.0
-
+                features['engulfing'] = safe_pattern_value(talib.CDLENGULFING(open_, high, low, close))
+                
             if FEATURE_CONFIG.get('hammer'):
-                if len(close) >= 1:
-                    features['hammer'] = talib.CDLHAMMER(open_, high, low, close)[-1]
-                else:
-                    features['hammer'] = 0.0
-
+                features['hammer'] = safe_pattern_value(talib.CDLHAMMER(open_, high, low, close))
+                
             if FEATURE_CONFIG.get('doji'):
-                if len(close) >= 1:
-                    features['doji'] = talib.CDLDOJI(open_, high, low, close)[-1]
-                else:
-                    features['doji'] = 0.0
-
+                features['doji'] = safe_pattern_value(talib.CDLDOJI(open_, high, low, close))
+                
             if FEATURE_CONFIG.get('morning_star'):
-                if len(close) >= 3:
-                    features['morning_star'] = talib.CDLMORNINGSTAR(open_, high, low, close)[-1]
-                else:
-                    features['morning_star'] = 0.0
-
+                features['morning_star'] = safe_pattern_value(talib.CDLMORNINGSTAR(open_, high, low, close))
+                
+            if FEATURE_CONFIG.get('evening_star'):
+                features['evening_star'] = safe_pattern_value(talib.CDLEVENINGSTAR(open_, high, low, close))
+                
             if FEATURE_CONFIG.get('shooting_star'):
-                if len(close) >= 1:
-                    features['shooting_star'] = talib.CDLSHOOTINGSTAR(open_, high, low, close)[-1]
-                else:
-                    features['shooting_star'] = 0.0
+                features['shooting_star'] = safe_pattern_value(talib.CDLSHOOTINGSTAR(open_, high, low, close))
 
     # =========== فیچرهای خبری و فاندامنتال ===========
     now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(pd.Timestamp.now().timestamp())
