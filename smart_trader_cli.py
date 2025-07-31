@@ -33,7 +33,7 @@ CANDLE_LIMIT = 200
 
 # تنظیمات اصلی
 BACKTEST_THRESHOLD = 0.0  # آستانه اعتماد برای بک‌تست
-LIVE_THRESHOLD = 0.4      # آستانه اعتماد برای لایو ترید
+LIVE_THRESHOLD = 0.0      # آستانه اعتماد برای لایو ترید
 COMMISSION_PCT = 0.002    # کارمزد 0.2%
 SLIPPAGE_PCT = 0.001      # لغزش قیمت 0.1%
 
@@ -754,7 +754,7 @@ class SmartTraderCLI:
         # تنظیم پارامترهای بک‌تست
         start_date = "2018-01-01"  # از ابتدای 2018
         end_date = "2025-07-28"    # تا دیروز
-        initial_balance = 1000.0  # سرمایه اولیه برای هر نماد
+        initial_balance = 100.0  # سرمایه اولیه برای هر نماد
         
         # ایجاد فایل CSV برای ذخیره نتایج معاملات
         backtest_trades_file = f"logs/backtest_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
