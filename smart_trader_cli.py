@@ -229,13 +229,13 @@ class SmartTraderCLI:
         print(f"Saved {len(candles)} candles and {len(news)} news items for {symbol}")
     
     def analyze_market(self, symbol):
-        """تحلیل بازار و صدور سیگنال با معماری دو لایه"""
+        """تحلیل بازار و صدور سیگنال با استفاده از فیچرهای انتخاب شده"""
         print(f"Analyzing market for {symbol}...")
         
         # دریافت داده‌های بازار
         self._fetch_and_store_data(symbol)
         candles = get_latest_candles(symbol, CANDLE_LIMIT)
-        news = get_latest_news(symbol, hours=CANDLE_LIMIT * 4)
+        news = get_latest_news(symbol, hours=24)  # فقط اخبار 24 ساعت اخیر
         
         if candles is None or candles.empty:
             print(f"No candles found for {symbol}, skipping analysis")
@@ -255,19 +255,21 @@ class SmartTraderCLI:
         else:
             features_dict = all_features.to_dict()
         
-        # انتخاب فیچرهای مناسب برای شرایط فعلی بازار
-        market_data = pd.DataFrame([features_dict])
-        selected_features = self.feature_selector.select_features(market_data)
+        # استفاده از فیچرهای منتخب
+        if not hasattr(self, 'selected_features') or not self.selected_features:
+            # اگر فیچرهای منتخب قبلاً تعیین نشده‌اند، آنها را انتخاب کن
+            market_data = pd.DataFrame([features_dict])
+            self.selected_features = self.feature_selector.select_features(market_data)
         
         # استفاده از مدل پایه با فیچرهای منتخب
-        X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in selected_features})
+        X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in self.selected_features})
         
         # پیش‌بینی با مدل پایه
         pred_class, pred_proba, confidence = self.base_model.predict(X_filtered)
         
-        # مهم: تبدیل مقدار numpy به مقادیر پایتون
-        class_idx = int(pred_class[0])
-        conf_value = float(confidence[0])
+        # تبدیل مقدار numpy به مقادیر پایتون
+        class_idx = int(pred_class[0]) if hasattr(pred_class[0], 'item') else int(pred_class[0])
+        conf_value = float(confidence[0]) if hasattr(confidence[0], 'item') else float(confidence[0])
         
         signal_map = {0: "Sell", 1: "Hold", 2: "Buy"}
         signal = signal_map.get(class_idx, "Hold")
@@ -427,6 +429,7 @@ class SmartTraderCLI:
     
     def run(self):
         """اجرای ربات در خط فرمان"""
+        self.run_live()
         self.initialize()
         
         # شروع ترد آپدیت قیمت‌ها
@@ -560,6 +563,88 @@ class SmartTraderCLI:
             return pd.DataFrame()
             
         return pd.DataFrame(all_data)
+
+    def run_live(self):
+        """اجرای حالت لایو ترید با بهینه‌سازی فیچر و تنظیمات مناسب"""
+        self.initialize()
+        print("Running in live trading mode...")
+        
+        # بهینه‌سازی انتخاب فیچر با داده‌های اخیر بازار
+        print("Optimizing feature selection for live market conditions...")
+        
+        # دریافت داده‌های اخیر برای انتخاب فیچر
+        recent_market_data = self._get_recent_market_data()
+        self.selected_features = self.feature_selector.select_features(
+            market_data=recent_market_data, 
+            force_update=False,  # فقط در صورت نیاز به‌روزرسانی می‌کند
+            is_backtest=False    # مشخص می‌کنیم که برای لایو ترید است
+        )
+        print(f"Using {len(self.selected_features)} optimized features for live trading")
+        
+        # تنظیم آستانه اعتماد برای لایو ترید
+        threshold = LIVE_THRESHOLD
+        print(f"Using confidence threshold of {threshold} for live trading")
+        
+        # شروع ترد آپدیت قیمت‌ها
+        threading.Thread(target=self._update_price_thread, daemon=True).start()
+        
+        last_execution = 0
+        interval = 60  # بررسی هر 60 ثانیه
+        
+        print("Starting live trading loop...")
+        try:
+            while True:
+                now = time.time()
+                if now - last_execution >= interval:
+                    # اجرای معاملات با آستانه لایو ترید
+                    for symbol in SYMBOLS:
+                        try:
+                            # بروزرسانی قیمت فعلی
+                            try:
+                                price_now = get_realtime_price(symbol)
+                                self.latest_prices[symbol] = price_now
+                            except Exception as e:
+                                print(f"Error getting price for {symbol}: {e}")
+                                continue
+                            
+                            # فقط اگر پوزیشن فعال نداریم، تحلیل انجام می‌دهیم
+                            if self.positions[symbol] is None:
+                                signal, confidence = self.analyze_market(symbol)
+                                
+                                # اضافه کردن اطلاعات دیباگ
+                                print(f"DEBUG: {symbol} signal: {signal}, confidence: {confidence:.4f}, threshold: {threshold}")
+                                
+                                # اگر اطمینان کافی وجود دارد، معامله می‌کنیم
+                                if confidence >= threshold:
+                                    if signal == "Buy":
+                                        self._open_position(symbol, "LONG", price_now)
+                                        print(f"🚀 OPENED LONG position for {symbol} at ${price_now:.2f}")
+                                    elif signal == "Sell":
+                                        self._open_position(symbol, "SHORT", price_now)
+                                        print(f"🔻 OPENED SHORT position for {symbol} at ${price_now:.2f}")
+                            
+                            # مدیریت TP/SL
+                            self._manage_positions(symbol, price_now)
+                            
+                        except Exception as e:
+                            import traceback
+                            print(f"Error in execute_trades for {symbol}: {e}")
+                            print(traceback.format_exc())
+                    
+                    # نمایش وضعیت
+                    self._print_status()
+                    last_execution = now
+                
+                time.sleep(1)
+        
+        except KeyboardInterrupt:
+            print("\nTrading bot stopped by user")
+            # ذخیره لاگ معاملات در خروج
+            self._save_trades_log()
+        except Exception as e:
+            import traceback
+            print(f"Error in live trading loop: {e}")
+            print(traceback.format_exc())
 
     def run_backtest(self):
         """اجرای بک‌تست روی داده‌های تاریخی"""
@@ -1120,6 +1205,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Smart Trading Bot CLI')
     parser.add_argument('--train_base', action='store_true', help='Train the base model with all features')
     parser.add_argument('--backtest', action='store_true', help='Run backtest instead of live trading')
+    parser.add_argument('--live', action='store_true', help='Run live trading with optimized settings')
     parser.add_argument('--download_historical', action='store_true', help='Download all historical data for all symbols')
     args = parser.parse_args()
     
@@ -1134,6 +1220,9 @@ if __name__ == "__main__":
     elif args.backtest:
         print("Running backtest mode...")
         bot.run_backtest()
+    elif args.live:
+        print("Starting optimized live trading...")
+        bot.run_live()
     else:
-        print("Starting live trading...")
+        print("Starting standard trading...")
         bot.run()
