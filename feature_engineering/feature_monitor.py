@@ -12,7 +12,7 @@ DB_CONFIG = {
     'host': 'localhost',
     'user': 'root',
     'password': '',  # رمز عبور را اینجا وارد کنید
-    'database': 'database'  # نام دیتابیس خود را وارد کنید
+    'database': 'tradebot-pro'  # نام دیتابیس خود را وارد کنید
 }
 
 class FeatureMonitor:
