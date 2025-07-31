@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import time
+from datetime import datetime
 from .feature_config import FEATURE_CONFIG
 
 try:
@@ -108,21 +110,108 @@ def safe_pattern_value(pattern_func):
         return 0
 
 def build_features(candles_df, news_df, symbol):
+    """
+    ساخت فیچرها با بهبود پشتیبانی از MySQL و اطمینان از محاسبه صحیح فیچرها
+    """
     features = {}
-    # --- رفع مشکل ts برای اخبار ---
+    debug_info = {}  # برای ذخیره اطلاعات دیباگ
+    
+    # === بررسی و اصلاح داده های ورودی ===
+    if candles_df is None or candles_df.empty:
+        print(f"Warning: Empty candle data provided for {symbol}")
+        return pd.DataFrame([{}])
+    
+    # اطمینان از وجود ستون‌های اصلی
+    required_columns = ['open', 'high', 'low', 'close', 'volume', 'timestamp']
+    for col in required_columns:
+        if col not in candles_df.columns:
+            if col == 'timestamp' and 'time' in candles_df.columns:
+                # برخی دیتابیس‌ها از 'time' به جای 'timestamp' استفاده می‌کنند
+                candles_df['timestamp'] = candles_df['time']
+                print(f"Using 'time' column as 'timestamp' for {symbol}")
+            else:
+                print(f"Warning: Missing required column '{col}' in candle data for {symbol}")
+                candles_df[col] = 0.0
+    
+    # === رفع مشکل اطلاعات اخبار ===
     if news_df is not None and not news_df.empty:
+        # اطلاعات اخبار
+        debug_info['news_count'] = len(news_df)
+        debug_info['news_columns'] = list(news_df.columns)
+        
+        # ساخت یک کپی از دیتافریم خبری
+        news_df = news_df.copy()
+        
+        # بررسی و تبدیل ستون‌های زمان برای اخبار
         if 'ts' not in news_df.columns:
             if 'published_at' in news_df.columns:
-                news_df = news_df.copy()
-                news_df['ts'] = pd.to_datetime(news_df['published_at']).values.astype('int64') // 10**9
+                print(f"Converting 'published_at' to 'ts' for {symbol} news ({len(news_df)} items)")
+                # تبدیل published_at به ts (timestamp)
+                try:
+                    # بررسی نوع داده published_at
+                    if news_df['published_at'].dtype == 'int64' or news_df['published_at'].dtype == 'float64':
+                        # مقدار عددی است، مستقیم استفاده می‌کنیم
+                        news_df['ts'] = news_df['published_at'].astype('int64')
+                    else:
+                        # تلاش برای تبدیل از فرمت‌های مختلف
+                        try:
+                            # اگر رشته باشد، تبدیل به timestamp
+                            news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                        except:
+                            # اگر تبدیل نشد، از زمان فعلی استفاده می‌کنیم
+                            print(f"Warning: Could not convert published_at to timestamp for {symbol}, using current time")
+                            now_ts = int(time.time())
+                            news_df['ts'] = now_ts
+                except Exception as e:
+                    print(f"Error in timestamp conversion: {e}")
+                    # در صورت خطا، از زمان فعلی استفاده می‌کنیم
+                    now_ts = int(time.time())
+                    news_df['ts'] = now_ts
+                
+                # اطلاعات دیباگ برای timestamp
+                oldest_ts = news_df['ts'].min() if len(news_df) > 0 else 0
+                newest_ts = news_df['ts'].max() if len(news_df) > 0 else 0
+                now_ts = int(time.time())
+                
+                debug_info['oldest_news'] = f"{(now_ts - oldest_ts) / 3600:.1f} hours ago"
+                debug_info['newest_news'] = f"{(now_ts - newest_ts) / 3600:.1f} hours ago"
+                
+                print(f"News timespan: {debug_info['oldest_news']} to {debug_info['newest_news']}")
+            else:
+                print(f"Warning: No timestamp column found in news data for {symbol}")
+                # ایجاد یک ستون ts مصنوعی
+                now_ts = int(time.time())
+                news_df['ts'] = now_ts
+        
+        # اطمینان از وجود sentiment_score
+        if 'sentiment_score' not in news_df.columns:
+            print(f"Warning: No sentiment_score column in news data for {symbol}")
+            news_df['sentiment_score'] = 0.0
+        
+        # تبدیل sentiment_score به عدد
+        news_df['sentiment_score'] = pd.to_numeric(news_df['sentiment_score'], errors='coerce').fillna(0.0)
 
     # =========== فیچرهای تکنیکال و آماری ===========
     if candles_df is not None and not candles_df.empty:
-        close = candles_df['close']
-        high = candles_df['high']
-        low = candles_df['low']
-        open_ = candles_df['open']
-        volume = candles_df['volume']
+        # تبدیل داده‌های ستون‌ها به سری‌های pandas
+        try:
+            close = pd.Series(candles_df['close'].values)
+            high = pd.Series(candles_df['high'].values)
+            low = pd.Series(candles_df['low'].values)
+            open_ = pd.Series(candles_df['open'].values)
+            volume = pd.Series(candles_df['volume'].values)
+            
+            # اطلاعات دیباگ
+            debug_info['candle_count'] = len(close)
+            debug_info['price_latest'] = close.values[-1] if len(close) > 0 else 0
+        except Exception as e:
+            print(f"Error preparing candle data: {e}")
+            # ایجاد سری‌های خالی
+            close = pd.Series([])
+            high = pd.Series([])
+            low = pd.Series([])
+            open_ = pd.Series([])
+            volume = pd.Series([])
 
         # EMA ها
         for ema_span in [5, 9, 10, 20, 21, 50, 100, 200]:
@@ -173,7 +262,7 @@ def build_features(candles_df, news_df, symbol):
             if len(close) >= 14:
                 low14 = low[-14:]
                 high14 = high[-14:]
-                stoch_k = 100 * (close.values[-1] - low14.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8)
+                stoch_k = 100 * (close.values[-1] - low14.min()) / (high14.max() - low14.min() + 1e-8)
                 if FEATURE_CONFIG.get('stoch_k'):
                     features['stoch_k'] = stoch_k
                 if FEATURE_CONFIG.get('stoch_d'):
@@ -198,7 +287,7 @@ def build_features(candles_df, news_df, symbol):
             if len(close) >= 14:
                 low14 = low[-14:]
                 high14 = high[-14:]
-                willr = (high14.values[-1] - close.values[-1]) / (high14.values[-1] - low14.values[-1] + 1e-8) * -100
+                willr = (high14.max() - close.values[-1]) / (high14.max() - low14.min() + 1e-8) * -100
                 features['willr'] = willr
             else:
                 features['willr'] = 0.0
@@ -423,7 +512,12 @@ def build_features(candles_df, news_df, symbol):
                 features['shooting_star'] = safe_pattern_value(talib.CDLSHOOTINGSTAR(open_, high, low, close))
 
     # =========== فیچرهای خبری و فاندامنتال ===========
-    now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(pd.Timestamp.now().timestamp())
+    try:
+        now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(time.time())
+    except:
+        now_ts = int(time.time())
+        
+    # تعریف بازه‌های زمانی برای فیچرهای خبری
     ranges = {
         '1h': 1*60*60, '6h': 6*60*60, '12h': 12*60*60, '24h': 24*60*60,
         '36h': 36*60*60, '48h': 48*60*60, '50h': 50*60*60, '62h': 62*60*60,
@@ -434,47 +528,86 @@ def build_features(candles_df, news_df, symbol):
     result = {}
 
     # اطمینان از اینکه news_df شامل اطلاعات و ستون‌های مورد نیاز است
-    if news_df is not None and not news_df.empty and 'sentiment_score' in news_df.columns:
-        features['news_count'] = len(news_df)
-        features['news_sentiment_mean'] = news_df['sentiment_score'].astype(float).mean()
-        features['news_sentiment_std'] = news_df['sentiment_score'].astype(float).std()
-        features['news_pos_count'] = news_df[news_df['sentiment_score'].astype(float) > 0.1].shape[0]
-        features['news_neg_count'] = news_df[news_df['sentiment_score'].astype(float) < -0.1].shape[0]
-        features['news_latest_sentiment'] = news_df['sentiment_score'].astype(float).values[0] if len(news_df) > 0 else 0.0
-        features['news_content_len'] = news_df['content'].str.len().mean() if 'content' in news_df.columns else 0.0
-
-        # اضافه کردن فیچرهای مبتنی بر بازه زمانی
-        for rng, seconds in ranges.items():
-            ts_column = 'ts' if 'ts' in news_df.columns else 'timestamp'
-            if ts_column in news_df.columns:
-                recent = news_df[news_df[ts_column] >= now_ts-seconds]
-                result[f'news_count_{rng}'] = len(recent)
-                
-                if len(recent) > 0 and 'sentiment_score' in recent:
-                    s = recent['sentiment_score'].astype(float)
-                    result[f'news_sentiment_mean_{rng}'] = s.mean()
-                    result[f'news_sentiment_max_{rng}'] = s.max()
-                    result[f'news_sentiment_min_{rng}'] = s.min()
-                    result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
-                    result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
-                    weighted_score += s.mean() * weights[rng]
-                    total_weight += weights[rng]
-                else:
-                    for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
-                        result[f'news_{v}_{rng}'] = 0.0
-            else:
-                # اگر ستون timestamp نداریم، مقادیر پیش‌فرض را قرار می‌دهیم
-                result[f'news_count_{rng}'] = 0
-                for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
-                    result[f'news_{v}_{rng}'] = 0.0
-                    
-        # محاسبه امتیاز وزن‌دار
-        if total_weight > 0:
-            result['news_weighted_score'] = weighted_score / total_weight
-        else:
-            result['news_weighted_score'] = 0.0
+    if news_df is not None and not news_df.empty:
+        # تبدیل sentiment_score به float
+        if 'sentiment_score' in news_df.columns:
+            news_df['sentiment_score'] = pd.to_numeric(news_df['sentiment_score'], errors='coerce').fillna(0.0)
             
-        features.update(result)
+            # فیچرهای پایه خبری
+            features['news_count'] = len(news_df)
+            features['news_sentiment_mean'] = news_df['sentiment_score'].mean()
+            features['news_sentiment_std'] = news_df['sentiment_score'].std()
+            features['news_pos_count'] = news_df[news_df['sentiment_score'] > 0.1].shape[0]
+            features['news_neg_count'] = news_df[news_df['sentiment_score'] < -0.1].shape[0]
+            features['news_latest_sentiment'] = news_df['sentiment_score'].values[0] if len(news_df) > 0 else 0.0
+            
+            if 'content' in news_df.columns:
+                features['news_content_len'] = news_df['content'].str.len().mean()
+            else:
+                features['news_content_len'] = 0.0
+
+            # اضافه کردن فیچرهای مبتنی بر بازه زمانی
+            for rng, seconds in ranges.items():
+                # انتخاب ستون زمان مناسب
+                ts_column = 'ts' if 'ts' in news_df.columns else 'published_at'
+                
+                if ts_column in news_df.columns:
+                    # فیلتر کردن اخبار اخیر برای این بازه زمانی
+                    recent = news_df[news_df[ts_column] >= now_ts - seconds]
+                    result[f'news_count_{rng}'] = len(recent)
+                    
+                    if len(recent) > 0 and 'sentiment_score' in recent.columns:
+                        # محاسبه فیچرهای خبری برای این بازه زمانی
+                        s = recent['sentiment_score']
+                        result[f'news_sentiment_mean_{rng}'] = s.mean()
+                        result[f'news_sentiment_max_{rng}'] = s.max()
+                        result[f'news_sentiment_min_{rng}'] = s.min()
+                        result[f'news_pos_ratio_{rng}'] = (s > 0.1).mean()
+                        result[f'news_neg_ratio_{rng}'] = (s < -0.1).mean()
+                        
+                        # امتیاز وزن‌دار
+                        weighted_score += s.mean() * weights[rng]
+                        total_weight += weights[rng]
+                    else:
+                        # مقادیر پیش‌فرض
+                        result[f'news_sentiment_mean_{rng}'] = 0.0
+                        result[f'news_sentiment_max_{rng}'] = 0.0
+                        result[f'news_sentiment_min_{rng}'] = 0.0
+                        result[f'news_pos_ratio_{rng}'] = 0.0
+                        result[f'news_neg_ratio_{rng}'] = 0.0
+                else:
+                    # اگر ستون زمان نداریم، مقادیر پیش‌فرض را قرار می‌دهیم
+                    result[f'news_count_{rng}'] = 0
+                    result[f'news_sentiment_mean_{rng}'] = 0.0
+                    result[f'news_sentiment_max_{rng}'] = 0.0
+                    result[f'news_sentiment_min_{rng}'] = 0.0
+                    result[f'news_pos_ratio_{rng}'] = 0.0
+                    result[f'news_neg_ratio_{rng}'] = 0.0
+                    
+            # محاسبه امتیاز وزن‌دار
+            if total_weight > 0:
+                result['news_weighted_score'] = weighted_score / total_weight
+            else:
+                result['news_weighted_score'] = 0.0
+                
+            features.update(result)
+        else:
+            # اگر sentiment_score نداریم، فیچرهای خبری را با مقادیر پیش‌فرض پر می‌کنیم
+            print(f"Warning: No sentiment_score in news data for {symbol}")
+            features['news_count'] = len(news_df)
+            features['news_sentiment_mean'] = 0.0
+            features['news_sentiment_std'] = 0.0
+            features['news_pos_count'] = 0
+            features['news_neg_count'] = 0
+            features['news_latest_sentiment'] = 0.0
+            features['news_content_len'] = 0.0
+            features['news_weighted_score'] = 0.0
+            
+            # فیچرهای زمانی خبری را نیز با مقادیر پیش‌فرض پر می‌کنیم
+            for rng in ranges:
+                features[f'news_count_{rng}'] = 0
+                for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
+                    features[f'news_{v}_{rng}'] = 0.0
     else:
         # اگر اخباری موجود نیست، همه فیچرهای خبری را با مقادیر پیش‌فرض پر می‌کنیم
         features['news_count'] = 0
@@ -492,6 +625,20 @@ def build_features(candles_df, news_df, symbol):
             for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
                 features[f'news_{v}_{rng}'] = 0.0
 
+    # چاپ اطلاعات دیباگ
+    if debug_info:
+        print(f"=== Feature calculation debug for {symbol} ===")
+        print(f"Candles: {debug_info.get('candle_count', 0)}, Price: {debug_info.get('price_latest', 0)}")
+        if 'news_count' in debug_info:
+            print(f"News: {debug_info.get('news_count', 0)} items, {debug_info.get('oldest_news', 'unknown')} to {debug_info.get('newest_news', 'unknown')}")
+
+    # اطمینان از جایگزینی مقادیر inf/NaN با صفر
     features_df = pd.DataFrame([features])
     features_df = features_df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    
+    # گزارش تعداد فیچرهای غیر صفر برای اطلاعات
+    non_zero_count = (features_df != 0).sum().sum()
+    total_features = len(features_df.columns)
+    print(f"Generated {non_zero_count}/{total_features} non-zero features for {symbol}")
+    
     return features_df
