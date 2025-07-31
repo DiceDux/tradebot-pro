@@ -104,6 +104,10 @@ class EnhancedBaseModel:
         print(f"Enhanced base model trained with {len(self.feature_names)} features and saved to {MODEL_PATH}")
         return self
     
+    def get_feature_names(self):
+        """Return the feature names used by this model."""
+        return self.feature_names
+
     def load(self):
         """
         بارگذاری مدل از دیسک
