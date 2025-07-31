@@ -89,6 +89,15 @@ class SmartTraderCLI:
         
     def _fetch_news_with_cache(self, symbol, limit=25, api_key=None):
         """دریافت اخبار با سیستم کش برای کاهش تعداد درخواست‌ها"""
+        # بررسی کلید API
+        if not api_key:
+            # استفاده از ثابت تعریف شده در سطح کلاس
+            api_key = NEWSAPI_KEY
+            
+        if not api_key:
+            print("Warning: No NewsAPI key provided. Please configure NEWSAPI_KEY in the script.")
+            return []
+            
         cache_dir = "cache"
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
@@ -109,13 +118,15 @@ class SmartTraderCLI:
         from data.fetch_online import fetch_news_newsapi
         
         try:
+            print(f"Fetching news for {symbol} with API key: {api_key[:5]}...")  # نمایش فقط 5 کاراکتر اول کلید برای امنیت
             news = fetch_news_newsapi(symbol, limit, api_key)
             if news:
                 # ذخیره در کش
                 joblib.dump(news, cache_file)
-            return news
+                return news
+            return []
         except Exception as e:
-            print(f"Error fetching news, using cached data if available: {e}")
+            print(f"Error fetching news: {e}")
             
             # اگر فایل کش وجود دارد (حتی قدیمی)، از آن استفاده کن
             if os.path.exists(cache_file):
@@ -171,6 +182,13 @@ class SmartTraderCLI:
         """آماده‌سازی داده‌های ناقص و دانلود اطلاعات لازم"""
         print("Preparing and filling missing data...")
         
+        # بررسی کلید API
+        if not NEWSAPI_KEY:
+            print("WARNING: NewsAPI key is not configured. News data will not be fetched.")
+            print("Please set NEWSAPI_KEY in the script to fetch news data.")
+        else:
+            print(f"Using NewsAPI key: {NEWSAPI_KEY[:5]}...")  # نمایش فقط 5 کاراکتر اول کلید برای امنیت
+        
         # ایجاد دایرکتوری کش
         if not os.path.exists("cache"):
             os.makedirs("cache")
@@ -190,26 +208,29 @@ class SmartTraderCLI:
                 print(f"Error fetching candles: {e}")
             
             # 2. دریافت اخبار با استفاده از API یا کش
-            try:
-                # استفاده از روش کش برای کاهش فراخوانی API
-                news = self._fetch_news_with_cache(symbol, limit=50)
-                
-                # تحلیل احساسات اخبار
-                for n in news:
-                    if "sentiment_score" not in n or n["sentiment_score"] == 0:
-                        try:
-                            text = (n.get("title") or "") + " " + (n.get("content") or "")
-                            n["sentiment_score"] = analyze_sentiment_finbert(text)
-                        except:
-                            n["sentiment_score"] = 0.0
-                
-                if news:
-                    save_news_to_db(news)
-                    print(f"Saved {len(news)} news items")
-                else:
-                    print("No news retrieved")
-            except Exception as e:
-                print(f"Error processing news: {e}")
+            if NEWSAPI_KEY:
+                try:
+                    # استفاده از روش کش برای کاهش فراخوانی API
+                    news = self._fetch_news_with_cache(symbol, limit=50, api_key=NEWSAPI_KEY)
+                    
+                    # تحلیل احساسات اخبار
+                    for n in news:
+                        if "sentiment_score" not in n or n["sentiment_score"] == 0:
+                            try:
+                                text = (n.get("title") or "") + " " + (n.get("content") or "")
+                                n["sentiment_score"] = analyze_sentiment_finbert(text)
+                            except:
+                                n["sentiment_score"] = 0.0
+                    
+                    if news:
+                        save_news_to_db(news)
+                        print(f"Saved {len(news)} news items")
+                    else:
+                        print("No news retrieved")
+                except Exception as e:
+                    print(f"Error processing news: {e}")
+            else:
+                print("Skipping news fetching due to missing API key")
                 
             time.sleep(1)  # کمی صبر کن تا از محدودیت API جلوگیری شود
             
