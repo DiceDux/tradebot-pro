@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import time
+import random
 from datetime import datetime
-from feature_config import FEATURE_CONFIG
+from .feature_config import FEATURE_CONFIG
 
 try:
     import ta
@@ -146,42 +147,80 @@ def build_features(candles_df, news_df, symbol):
         if 'ts' not in news_df.columns:
             if 'published_at' in news_df.columns:
                 print(f"Converting 'published_at' to 'ts' for {symbol} news ({len(news_df)} items)")
-                # تبدیل published_at به ts (timestamp)
+                
+                # بررسی نوع داده published_at
+                sample = news_df['published_at'].iloc[0] if len(news_df) > 0 else None
+                print(f"Sample published_at value: {sample} (type: {type(sample).__name__})")
+                
                 try:
-                    # بررسی نوع داده published_at
-                    if news_df['published_at'].dtype == 'int64' or news_df['published_at'].dtype == 'float64':
-                        # مقدار عددی است، مستقیم استفاده می‌کنیم
-                        news_df['ts'] = news_df['published_at'].astype('int64')
+                    # تبدیل تاریخ‌های MySQL timestamp به یونیکس تایم‌استمپ
+                    if isinstance(sample, str):
+                        # تبدیل رشته تاریخ به timestamp
+                        news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                    elif pd.api.types.is_datetime64_any_dtype(news_df['published_at']):
+                        # اگر قبلاً به datetime تبدیل شده، تبدیل به timestamp
+                        news_df['ts'] = news_df['published_at'].astype(int) // 10**9
+                    elif isinstance(sample, (int, float)):
+                        # اگر عدد است، مستقیم استفاده کن
+                        news_df['ts'] = news_df['published_at'].astype(int)
                     else:
-                        # تلاش برای تبدیل از فرمت‌های مختلف
-                        try:
-                            # اگر رشته باشد، تبدیل به timestamp
-                            news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
-                        except:
-                            # اگر تبدیل نشد، از زمان فعلی استفاده می‌کنیم
-                            print(f"Warning: Could not convert published_at to timestamp for {symbol}, using current time")
-                            now_ts = int(time.time())
-                            news_df['ts'] = now_ts
-                except Exception as e:
-                    print(f"Error in timestamp conversion: {e}")
-                    # در صورت خطا، از زمان فعلی استفاده می‌کنیم
+                        # در صورت ناشناخته بودن، تبدیل به datetime و سپس timestamp
+                        news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                    
+                    # گزارش نتیجه تبدیل
                     now_ts = int(time.time())
-                    news_df['ts'] = now_ts
-                
-                # اطلاعات دیباگ برای timestamp
-                oldest_ts = news_df['ts'].min() if len(news_df) > 0 else 0
-                newest_ts = news_df['ts'].max() if len(news_df) > 0 else 0
-                now_ts = int(time.time())
-                
-                debug_info['oldest_news'] = f"{(now_ts - oldest_ts) / 3600:.1f} hours ago"
-                debug_info['newest_news'] = f"{(now_ts - newest_ts) / 3600:.1f} hours ago"
-                
-                print(f"News timespan: {debug_info['oldest_news']} to {debug_info['newest_news']}")
+                    oldest_ts = news_df['ts'].min()
+                    newest_ts = news_df['ts'].max()
+                    
+                    # محاسبه فاصله زمانی بر حسب ساعت
+                    oldest_hours = (now_ts - oldest_ts) / 3600
+                    newest_hours = (now_ts - newest_ts) / 3600
+                    
+                    print(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
+                    print(f"Sample converted timestamp: {news_df['ts'].iloc[0]} (from {news_df['published_at'].iloc[0]})")
+                    
+                    # آمار توزیع اخبار در بازه‌های زمانی
+                    h1 = len(news_df[news_df['ts'] >= now_ts - 3600])
+                    h6 = len(news_df[news_df['ts'] >= now_ts - 21600])
+                    h24 = len(news_df[news_df['ts'] >= now_ts - 86400])
+                    h72 = len(news_df[news_df['ts'] >= now_ts - 259200])
+                    
+                    print(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
+                    
+                except Exception as e:
+                    print(f"Error converting published_at to timestamp: {e}")
+                    # در صورت خطا، یک تبدیل ساده انجام می‌دهیم
+                    try:
+                        # تلاش برای تبدیل با pd.to_datetime
+                        news_df['ts'] = pd.to_datetime(news_df['published_at']).astype(int) // 10**9
+                    except:
+                        print("Falling back to string-based conversion")
+                        # تبدیل با استفاده از strptime
+                        ts_values = []
+                        for val in news_df['published_at']:
+                            try:
+                                if isinstance(val, str):
+                                    # تلاش برای تبدیل با فرمت‌های مختلف
+                                    try:
+                                        # فرمت MySQL timestamp: 'YYYY-MM-DD HH:MM:SS'
+                                        dt = datetime.strptime(val, '%Y-%m-%d %H:%M:%S')
+                                        ts_values.append(int(dt.timestamp()))
+                                    except:
+                                        # سایر فرمت‌های احتمالی
+                                        dt = pd.to_datetime(val)
+                                        ts_values.append(int(dt.timestamp()))
+                                elif isinstance(val, (int, float)):
+                                    ts_values.append(int(val))
+                                else:
+                                    ts_values.append(int(time.time()))
+                            except:
+                                ts_values.append(int(time.time()))
+                        
+                        news_df['ts'] = ts_values
             else:
-                print(f"Warning: No timestamp column found in news data for {symbol}")
-                # ایجاد یک ستون ts مصنوعی
-                now_ts = int(time.time())
-                news_df['ts'] = now_ts
+                print(f"Warning: No 'published_at' column found in news data for {symbol}")
+                # ایجاد ستون ts با مقادیر پیش‌فرض
+                news_df['ts'] = int(time.time())
         
         # اطمینان از وجود sentiment_score
         if 'sentiment_score' not in news_df.columns:
