@@ -222,19 +222,20 @@ class SmartTraderCLI:
             labeled_candles = self._make_labels(candles)
             
             # ساخت فیچرها
-            for i in range(100, len(labeled_candles)):
-                candle_slice = labeled_candles.iloc[i-99:i+1]
+            for i in range(200, len(labeled_candles)):
+                candle_slice = labeled_candles.iloc[max(0, i-199):i+1]
                 candle_time = pd.to_datetime(labeled_candles.iloc[i]['timestamp'], unit='s')
                 news_slice = news[news['published_at'] <= candle_time] if not news.empty else pd.DataFrame()
                 
-                features = build_features(candle_slice, news_slice, symbol)
-                if isinstance(features, pd.DataFrame):
-                    features_dict = features.iloc[0].to_dict()
-                else:
-                    features_dict = features.to_dict()
-                
-                all_features.append(features_dict)
-                all_labels.append(labeled_candles.iloc[i]['label'])
+                if len(candle_slice) >= 50:  # اطمینان از وجود کندل‌های کافی
+                    features = build_features(candle_slice, news_slice, symbol)
+                    if isinstance(features, pd.DataFrame):
+                        features_dict = features.iloc[0].to_dict()
+                    else:
+                        features_dict = features.to_dict()
+                    
+                    all_features.append(features_dict)
+                    all_labels.append(labeled_candles.iloc[i]['label'])
                 
                 if i % 500 == 0:
                     print(f"Processed {i}/{len(labeled_candles)} candles for {symbol}")
