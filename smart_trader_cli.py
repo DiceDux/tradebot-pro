@@ -28,8 +28,14 @@ BALANCE = 100
 TP_STEPS = [0.03, 0.05, 0.07]
 TP_QTYS = [0.3, 0.3, 0.4]
 SL_PCT = 0.02
-THRESHOLD = 0.7
+THRESHOLD = 0.0
 CANDLE_LIMIT = 200
+
+# تنظیمات اصلی
+BACKTEST_THRESHOLD = 0.3  # آستانه اعتماد برای بک‌تست
+LIVE_THRESHOLD = 0.4      # آستانه اعتماد برای لایو ترید
+COMMISSION_PCT = 0.002    # کارمزد 0.2%
+SLIPPAGE_PCT = 0.001      # لغزش قیمت 0.1%
 
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "ede1e0b0db7140fdbbd20f6f1b440cb9")
 
@@ -86,20 +92,26 @@ class SmartTraderCLI:
         
         # بارگذاری مدل پایه یا ساخت آن اگر وجود ندارد
         try:
-            self.base_model.load()
+            self.base_model = EnhancedBaseModel()
         except:
             print("Base model not found, need to train it first.")
             self._train_base_model()
+    
+        # دریافت تمام نام فیچرها
+        self.all_feature_names = self.base_model.get_feature_names()
         
-        # ساخت سلکتور فیچر
-        all_feature_names = self.base_model.feature_names
+        # انتخابگر فیچر پیشرفته
+        from feature_engineering.adaptive_feature_selector import AdaptiveFeatureSelector
         self.feature_selector = AdaptiveFeatureSelector(
-            self.base_model.model, 
-            all_feature_names,
-            top_n=30,  # تعداد فیچرهای انتخابی
-            update_interval_hours=48  # بروزرسانی هر 48 ساعت
+            base_model=self.base_model,
+            all_feature_names=self.all_feature_names,
+            top_n=30,  # حداکثر تعداد فیچرهای انتخابی
+            backtest_update_hours=24,  # برای بک‌تست هر 24 ساعت
+            live_update_hours=4,   # برای لایو ترید هر 4 ساعت
+            population_size=20,    # اندازه جمعیت الگوریتم ژنتیک
+            generations=10         # تعداد نسل‌ها
         )
-        
+
         # ساخت مدیریت TP/SL با یادگیری تقویتی
         self.tpsl_manager = DQNTPSLManager(
             state_size=10,  # تعداد ویژگی‌های حالت
@@ -478,10 +490,92 @@ class SmartTraderCLI:
         
         print("="*50 + "\n")
     
+    def _prepare_historical_data_for_feature_selection(self):
+        """آماده‌سازی داده‌های تاریخی برای انتخاب فیچر"""
+        from data.candle_manager import get_latest_candles
+        from data.news_manager import get_latest_news
+        from feature_engineering.feature_engineer import build_features
+        
+        print("Preparing historical market data for feature selection...")
+        all_data = []
+        symbols = ["BTCUSDT", "ETHUSDT"]
+        
+        for symbol in symbols:
+            try:
+                # دریافت کندل‌های تاریخی (500 تا)
+                candles = get_latest_candles(symbol, 500)
+                if candles is None or len(candles) < 100:
+                    continue
+                    
+                # اخبار مرتبط
+                news = get_latest_news(symbol, hours=48)
+                
+                # برای هر پنجره زمانی، فیچرها را استخراج می‌کنیم
+                for i in range(50, len(candles), 10):  # با فاصله 10 کندل
+                    candle_slice = candles.iloc[i-50:i+1].copy()
+                    features = build_features(candle_slice, news, symbol)
+                    
+                    if isinstance(features, pd.DataFrame) and not features.empty:
+                        all_data.append(features.iloc[0].to_dict())
+            except Exception as e:
+                print(f"Error preparing historical data for {symbol}: {e}")
+        
+        if not all_data:
+            print("Could not prepare historical data for feature selection")
+            return pd.DataFrame()
+            
+        return pd.DataFrame(all_data)
+
+    def _get_recent_market_data(self):
+        """دریافت داده‌های اخیر بازار برای لایو ترید"""
+        from data.candle_manager import get_latest_candles
+        from data.news_manager import get_latest_news
+        from feature_engineering.feature_engineer import build_features
+        
+        print("Fetching recent market data for live feature selection...")
+        all_data = []
+        symbols = ["BTCUSDT", "ETHUSDT"]
+        
+        for symbol in symbols:
+            try:
+                # دریافت کندل‌های اخیر (100 تا)
+                candles = get_latest_candles(symbol, 100)
+                if candles is None or len(candles) < 50:
+                    continue
+                    
+                # اخبار اخیر (24 ساعت گذشته)
+                news = get_latest_news(symbol, hours=24)
+                
+                # ساخت فیچرها برای داده‌های اخیر
+                candle_slice = candles.iloc[-51:].copy()  # 50 کندل آخر + کندل فعلی
+                features = build_features(candle_slice, news, symbol)
+                
+                if isinstance(features, pd.DataFrame) and not features.empty:
+                    all_data.append(features.iloc[0].to_dict())
+            except Exception as e:
+                print(f"Error fetching recent data for {symbol}: {e}")
+        
+        if not all_data:
+            print("Could not fetch recent market data for feature selection")
+            return pd.DataFrame()
+            
+        return pd.DataFrame(all_data)
+
     def run_backtest(self):
         """اجرای بک‌تست روی داده‌های تاریخی"""
         self.initialize()
         logging.info("Running backtest on historical data...")
+        
+        # بهینه‌سازی انتخاب فیچر قبل از شروع بک‌تست
+        print("Optimizing feature selection for backtest environment...")
+        # تهیه داده‌های تاریخی برای انتخاب فیچر
+        historical_market_data = self._prepare_historical_data_for_feature_selection()
+        self.selected_features = self.feature_selector.select_features(
+            market_data=historical_market_data, 
+            force_update=False,  # اجبار به بروزرسانی نکنیم مگر اینکه لازم باشد
+            is_backtest=True
+        )
+        print(f"Using {len(self.selected_features)} optimized features for backtest")
         
         # تنظیم پارامترهای بک‌تست
         start_date = "2018-01-01"  # از ابتدای 2018
@@ -582,6 +676,7 @@ class SmartTraderCLI:
                     signal = signal_map.get(class_idx, "Hold")
                     
                     # اگر اطمینان کافی وجود دارد، معامله می‌کنیم
+                    threshold = BACKTEST_THRESHOLD
                     if conf_value >= THRESHOLD:
                         if signal == "Buy":
                             self._open_position(symbol, "LONG", current_price, current_time.timestamp())
