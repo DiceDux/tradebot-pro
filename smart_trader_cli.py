@@ -125,7 +125,78 @@ class SmartTraderCLI:
         
         print("Smart Trading Bot initialized successfully!")
         return self
+    
+    def _display_selected_features(self):
+        """نمایش فیچرهای انتخاب شده با اهمیت آنها"""
+        if not hasattr(self, 'selected_features') or not self.selected_features:
+            print("No features selected yet!")
+            return
         
+        print("\n" + "="*60)
+        print(f"SELECTED FEATURES ({len(self.selected_features)} features)")
+        print("="*60)
+        
+        # نمایش فیچرها با اهمیت آنها
+        feature_importance = {}
+        if hasattr(self.feature_selector, 'feature_importance'):
+            feature_importance = self.feature_selector.feature_importance
+        
+        sorted_features = sorted(
+            [(f, feature_importance.get(f, 0)) for f in self.selected_features],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        for i, (feature, importance) in enumerate(sorted_features[:15]):  # 15 فیچر اول
+            print(f"{i+1:2d}. {feature:30s}: {importance:.6f}")
+        
+        if len(sorted_features) > 15:
+            print(f"... and {len(sorted_features) - 15} more features")
+        
+        print("="*60)
+        
+        # ذخیره لیست فیچرها در یک فایل متنی
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        feature_log_file = os.path.join(log_dir, f"selected_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        
+        with open(feature_log_file, 'w') as f:
+            f.write(f"Selected Features at {datetime.now()}\n")
+            f.write("="*60 + "\n")
+            for i, (feature, importance) in enumerate(sorted_features):
+                f.write(f"{i+1:2d}. {feature:30s}: {importance:.6f}\n")
+            f.write("\n\nTotal combinations evaluated: ")
+            if hasattr(self.feature_selector, 'combinations_evaluated'):
+                f.write(f"{self.feature_selector.combinations_evaluated}\n")
+            else:
+                f.write("unknown\n")
+                
+        print(f"Feature details saved to {feature_log_file}")
+        
+        return sorted_features
+
+    def _get_features_summary(self, max_features=5):
+        """خلاصه فیچرهای انتخاب شده برای نمایش در وضعیت"""
+        if not hasattr(self, 'selected_features') or not self.selected_features:
+            return "No features selected"
+            
+        # دریافت فیچرهای مهم
+        feature_importance = {}
+        if hasattr(self.feature_selector, 'feature_importance'):
+            feature_importance = self.feature_selector.feature_importance
+            
+        sorted_features = sorted(
+            [(f, feature_importance.get(f, 0)) for f in self.selected_features],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        top_features = [f for f, _ in sorted_features[:max_features]]
+        
+        return f"{len(self.selected_features)} features selected, top {max_features}: " + ", ".join(top_features)
+    
     def _train_base_model(self):
         """آموزش مدل پایه با تمام فیچرها و داده‌های موجود"""
         print("Training base model with all features...")
@@ -260,6 +331,8 @@ class SmartTraderCLI:
             # اگر فیچرهای منتخب قبلاً تعیین نشده‌اند، آنها را انتخاب کن
             market_data = pd.DataFrame([features_dict])
             self.selected_features = self.feature_selector.select_features(market_data)
+            print(f"Updated selected features to {len(self.selected_features)} features")
+            logging.info(f"Updated selected features to {len(self.selected_features)} features")
         
         # استفاده از مدل پایه با فیچرهای منتخب
         X_filtered = pd.DataFrame({f: [features_dict.get(f, 0.0)] for f in self.selected_features})
@@ -473,9 +546,14 @@ class SmartTraderCLI:
     
     def _print_status(self):
         """چاپ وضعیت فعلی در خط فرمان"""
-        print("\n" + "="*50)
+        print("\n" + "="*60)
         print(f"STATUS UPDATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("="*50)
+        print("="*60)
+        
+        # نمایش وضعیت فیچرها
+        features_info = self._get_features_summary()
+        print(f"Features: {features_info}")
+        print("-"*60)
         
         for symbol in SYMBOLS:
             price = self.latest_prices.get(symbol, 0.0)
@@ -491,7 +569,15 @@ class SmartTraderCLI:
             else:
                 print("  No active position")
         
-        print("="*50 + "\n")
+        # نمایش آمار جلسه معاملاتی
+        if self.trades_log:
+            wins = len([t for t in self.trades_log if t.get('pnl', 0) > 0])
+            losses = len([t for t in self.trades_log if t.get('pnl', 0) < 0])
+            win_rate = wins/(wins+losses)*100 if wins+losses > 0 else 0
+            print("-"*60)
+            print(f"Session stats: {len(self.trades_log)} trades | Win rate: {win_rate:.1f}%")
+        
+        print("="*60 + "\n")
     
     def _prepare_historical_data_for_feature_selection(self):
         """آماده‌سازی داده‌های تاریخی برای انتخاب فیچر"""
@@ -580,6 +666,7 @@ class SmartTraderCLI:
             is_backtest=False    # مشخص می‌کنیم که برای لایو ترید است
         )
         print(f"Using {len(self.selected_features)} optimized features for live trading")
+        self._display_selected_features()
         
         # تنظیم آستانه اعتماد برای لایو ترید
         threshold = LIVE_THRESHOLD
@@ -661,6 +748,7 @@ class SmartTraderCLI:
             is_backtest=True
         )
         print(f"Using {len(self.selected_features)} optimized features for backtest")
+        self._display_selected_features()
         
         # تنظیم پارامترهای بک‌تست
         start_date = "2018-01-01"  # از ابتدای 2018
@@ -762,7 +850,7 @@ class SmartTraderCLI:
                     
                     # اگر اطمینان کافی وجود دارد، معامله می‌کنیم
                     threshold = BACKTEST_THRESHOLD
-                    if conf_value >= THRESHOLD:
+                    if conf_value >= threshold:
                         if signal == "Buy":
                             self._open_position(symbol, "LONG", current_price, current_time.timestamp())
                             logging.info(f"📈 LONG signal at {current_time} - Price: ${current_price:.2f}, Confidence: {conf_value:.2f}")
