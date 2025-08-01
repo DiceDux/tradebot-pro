@@ -1,5 +1,5 @@
 """
-راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته (نسخه بهبود یافته)
+راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته (نسخه بهینه شده)
 """
 import argparse
 import time
@@ -39,7 +39,7 @@ def start_trading_system(symbols=['BTCUSDT', 'ETHUSDT']):
     orchestrator.start()
     return orchestrator
 
-def prepare_historical_training_data(symbol, candles_limit=50000, news_limit=2000):
+def prepare_historical_training_data(symbol):
     """
     آماده‌سازی داده‌های تاریخی برای آموزش با استفاده از تکنیک‌های پیشرفته
     """
@@ -48,6 +48,15 @@ def prepare_historical_training_data(symbol, candles_limit=50000, news_limit=200
     from feature_engineering.feature_engineer import build_features
     
     print(f"Loading historical data for {symbol}...")
+    
+    # استفاده بهینه از داده‌های موجود بر اساس نوع ارز
+    if symbol in ["BTCUSDT", "ETHUSDT"]:
+        candles_limit = 15000  # برای بیت‌کوین و اتریوم که ~17000 کندل داریم
+        news_limit = 5000  # برای اخبار بیت‌کوین (~22500) و اتریوم (~14800)
+    else:
+        candles_limit = 10000  # برای سایر ارزها
+        news_limit = 3000  # برای سایر ارزها
+        
     candles = get_latest_candles(symbol, candles_limit)
     news = get_latest_news(symbol, news_limit)
     
@@ -63,15 +72,15 @@ def prepare_historical_training_data(symbol, candles_limit=50000, news_limit=200
     
     print("Creating target variables with multiple prediction horizons...")
     
-    # افق‌های پیش‌بینی متنوع برای غنی‌سازی داده‌ها
-    prediction_horizons = [6, 12, 24, 48, 96]  # افق‌های کوتاه‌مدت تا میان‌مدت
+    # افق‌های پیش‌بینی متنوع - تطبیق داده شده با بازه‌های معاملاتی 4 ساعته
+    # برای بازه 4 ساعته، معادل روزانه = 6 کندل، هفتگی = 42 کندل، ماهانه ~180 کندل
+    prediction_horizons = [1, 3, 6, 12, 24, 42]  # از خیلی کوتاه‌مدت تا میان‌مدت
     
     # آستانه‌های متفاوت برای طبقه‌بندی
-    # پارامترهای متعادل‌تر برای داشتن توزیع طبیعی‌تر کلاس‌ها
     threshold_pairs = [
-        (-0.006, 0.006),  # محافظه‌کارانه
-        (-0.004, 0.004),  # متعادل
-        (-0.008, 0.008),  # تهاجمی
+        (-0.005, 0.005),  # استاندارد: 0.5% تغییر قیمت
+        (-0.008, 0.008),  # تهاجمی‌تر: 0.8% تغییر قیمت
+        (-0.003, 0.003),  # محافظه‌کارانه‌تر: 0.3% تغییر قیمت
     ]
     
     all_training_data = []
@@ -127,54 +136,58 @@ def prepare_historical_training_data(symbol, candles_limit=50000, news_limit=200
         for cls, count in final_class_counts.items():
             print(f"Class {cls}: {count} samples ({count/len(final_training_data)*100:.1f}%)")
         
-        # متعادل‌سازی داده‌ها اگر عدم تعادل شدید وجود دارد
-        min_samples = final_class_counts.min()
-        if min_samples < 100:
-            print(f"Warning: Minimum class size ({min_samples}) is too small. Using oversampling to balance classes.")
+        # متعادل‌سازی داده‌ها (نمونه‌گیری مجدد)
+        # هدف: داشتن حداقل 300 نمونه از هر کلاس و حداکثر 5000 نمونه از هر کلاس
+        balanced_dfs = []
+        
+        # برای هر کلاس
+        target_min_samples = 300
+        target_max_samples = 5000
+        
+        for cls in range(3):  # 0, 1, 2 = Sell, Hold, Buy
+            cls_data = final_training_data[final_training_data['target'] == cls]
+            cls_count = len(cls_data)
             
-            # متعادل‌سازی با تکنیک oversampling
-            balanced_dfs = []
-            
-            # برای هر کلاس
-            for cls in final_class_counts.index:
-                cls_data = final_training_data[final_training_data['target'] == cls]
-                
-                # تکرار نمونه‌ها برای کلاس‌های کم‌نمونه
-                if len(cls_data) < 500:  # تعداد هدف برای هر کلاس
-                    # تعیین تعداد نمونه‌های مورد نیاز
-                    n_samples = min(500, max(300, min_samples * 3))
-                    
-                    # نمونه‌گیری مجدد با جایگذاری
-                    resampled = resample(
-                        cls_data,
-                        replace=True,
-                        n_samples=n_samples,
-                        random_state=42
-                    )
-                    balanced_dfs.append(resampled)
-                else:
-                    # برای کلاس‌های با نمونه کافی، فقط اضافه کنید
-                    balanced_dfs.append(cls_data)
-            
-            # ترکیب داده‌های متعادل شده
-            final_training_data = pd.concat(balanced_dfs)
-            
-            # بررسی توزیع بعد از متعادل‌سازی
-            balanced_counts = final_training_data['target'].value_counts()
-            print("\nFinal class distribution after balancing:")
-            for cls, count in balanced_counts.items():
-                print(f"Class {cls}: {count} samples ({count/len(final_training_data)*100:.1f}%)")
+            if cls_count < target_min_samples:
+                # اگر تعداد نمونه‌ها کمتر از حداقل است، نمونه‌گیری مجدد با جایگذاری
+                resampled = resample(
+                    cls_data, 
+                    replace=True,
+                    n_samples=target_min_samples,
+                    random_state=42
+                )
+                balanced_dfs.append(resampled)
+                print(f"Class {cls} upsampled: {cls_count} -> {target_min_samples}")
+            elif cls_count > target_max_samples:
+                # اگر تعداد نمونه‌ها بیشتر از حداکثر است، کاهش تعداد نمونه‌ها
+                resampled = resample(
+                    cls_data, 
+                    replace=False,
+                    n_samples=target_max_samples,
+                    random_state=42
+                )
+                balanced_dfs.append(resampled)
+                print(f"Class {cls} downsampled: {cls_count} -> {target_max_samples}")
+            else:
+                # اگر تعداد نمونه‌ها در محدوده مناسب است، بدون تغییر استفاده کنید
+                balanced_dfs.append(cls_data)
+                print(f"Class {cls} kept as is: {cls_count} samples")
+        
+        # ترکیب داده‌های متعادل شده
+        balanced_training_data = pd.concat(balanced_dfs)
         
         # برچسب‌گذاری کلاس‌ها برای خوانایی بهتر
         class_names = {0: "Sell", 1: "Hold", 2: "Buy"}
-        print("\nFinal training data summary:")
-        print(f"Total samples: {len(final_training_data)}")
-        print("Class distribution:")
-        for cls, name in class_names.items():
-            count = final_training_data['target'].value_counts().get(cls, 0)
-            print(f"  {name}: {count} samples")
         
-        return final_training_data
+        # بررسی توزیع بعد از متعادل‌سازی
+        balanced_counts = balanced_training_data['target'].value_counts()
+        print("\nFinal class distribution after balancing:")
+        for cls, count in balanced_counts.items():
+            print(f"Class {cls} ({class_names[cls]}): {count} samples ({count/len(balanced_training_data)*100:.1f}%)")
+        
+        print(f"\nFinal training dataset size: {len(balanced_training_data)} samples")
+        
+        return balanced_training_data
     else:
         print("Error: Could not prepare any valid training data")
         return None
