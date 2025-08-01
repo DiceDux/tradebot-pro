@@ -1,180 +1,217 @@
 """
 کلاس پایه برای مدل‌های متخصص
 """
-import numpy as np
-import pandas as pd
 import pickle
 import os
+import logging
+import numpy as np
+import pandas as pd
 from datetime import datetime
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from xgboost import XGBClassifier
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# تنظیم لاگر
+logger = logging.getLogger("specialist_models")
+os.makedirs('logs', exist_ok=True)
+file_handler = logging.FileHandler('logs/models.log')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+logger.setLevel(logging.INFO)
 
 class BaseSpecialistModel:
-    def __init__(self, name, feature_group=None):
-        """
-        مدل متخصص پایه
-        
-        Args:
-            name: نام مدل
-            feature_group: گروه فیچر مربوطه
-        """
-        self.name = name
+    """کلاس پایه برای مدل‌های متخصص"""
+    
+    def __init__(self, model_name='base', feature_group=''):
+        """مقداردهی اولیه"""
+        self.model_name = model_name
         self.feature_group = feature_group
         self.model = None
         self.scaler = None
-        self.feature_names = None
-        self.training_date = None
-        self.accuracy = None
-        self.f1_score = None
-        self.confusion_matrix = None
-    
+        self.training_history = []
+        self.model_file = f"model/specialists/{model_name}.pkl"
+        
+    def create_model(self):
+        """
+        ایجاد مدل پیشرفته با استفاده از XGBoost
+        """
+        model = XGBClassifier(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=6,
+            min_child_weight=1,
+            gamma=0,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            objective='multi:softprob',
+            num_class=3,
+            eval_metric='mlogloss',
+            random_state=42
+        )
+        return model
+        
+    def get_required_features(self):
+        """دریافت لیست فیچرهای مورد نیاز این مدل"""
+        from feature_selection.feature_groups import FEATURE_GROUPS
+        return FEATURE_GROUPS.get(self.feature_group, [])
+        
+    def preprocess_features(self, X):
+        """
+        پیش‌پردازش فیچرها قبل از آموزش یا پیش‌بینی
+        - مدیریت مقادیر گمشده
+        - نرمال‌سازی داده‌ها
+        """
+        # کپی از داده‌ها
+        X_processed = X.copy()
+        
+        # مدیریت مقادیر گمشده
+        X_processed = X_processed.fillna(0)
+        
+        # نرمال‌سازی داده‌ها
+        if self.scaler is None:
+            self.scaler = RobustScaler()
+            X_scaled = pd.DataFrame(
+                self.scaler.fit_transform(X_processed),
+                columns=X_processed.columns,
+                index=X_processed.index
+            )
+        else:
+            X_scaled = pd.DataFrame(
+                self.scaler.transform(X_processed),
+                columns=X_processed.columns,
+                index=X_processed.index
+            )
+            
+        return X_scaled
+        
     def train(self, X, y):
         """
         آموزش مدل متخصص
         
         Args:
-            X: داده‌های ورودی
-            y: برچسب‌ها
+            X: فیچرهای ورودی (DataFrame)
+            y: برچسب‌های هدف (0: فروش، 1: نگهداری، 2: خرید)
         """
-        print(f"Training {self.name} specialist model with {X.shape[1]} features and {X.shape[0]} samples")
+        start_time = datetime.now()
         
-        # حذف مقادیر NaN و inf
-        X = X.replace([np.inf, -np.inf], np.nan)
-        X = X.fillna(0)
+        # بررسی وجود داده کافی
+        if len(X) < 10:
+            logger.warning(f"Not enough data for training {self.model_name} (samples: {len(X)})")
+            print(f"Warning: Not enough data for training {self.model_name} model (only {len(X)} samples)")
+            return False
+            
+        logger.info(f"Training {self.model_name} specialist model with {len(X.columns)} features and {len(X)} samples")
+        print(f"Training {self.model_name} specialist model with {len(X.columns)} features and {len(X)} samples")
         
-        # ذخیره نام فیچرها
-        self.feature_names = list(X.columns)
+        # پیش‌پردازش فیچرها
+        X_scaled = self.preprocess_features(X)
         
-        # نرمال‌سازی داده‌ها
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-        
+        # ایجاد مدل
+        if self.model is None:
+            self.model = self.create_model()
+            
         # آموزش مدل
-        self.model = self._create_model()
-        self.model.fit(X_scaled, y)
-        
-        # ارزیابی مدل
-        y_pred = self.model.predict(X_scaled)
-        self.accuracy = accuracy_score(y, y_pred)
-        self.f1_score = f1_score(y, y_pred, average='weighted')
-        self.confusion_matrix = confusion_matrix(y, y_pred)
-        self.training_date = datetime.now()
-        
-        print(f"{self.name} model trained with accuracy: {self.accuracy:.4f}, F1: {self.f1_score:.4f}")
-        
-        return self
-    
-    def _create_model(self):
-        """ایجاد مدل (باید در کلاس‌های فرزند پیاده‌سازی شود)"""
-        return RandomForestClassifier(n_estimators=100, random_state=42)
-    
+        try:
+            self.model.fit(X_scaled, y)
+            
+            # ارزیابی روی داده‌های آموزش
+            train_accuracy = self.model.score(X_scaled, y)
+            
+            # محاسبه F1-score
+            from sklearn.metrics import f1_score
+            y_pred = self.model.predict(X_scaled)
+            f1 = f1_score(y, y_pred, average='macro')
+            
+            end_time = datetime.now()
+            training_time = (end_time - start_time).total_seconds()
+            
+            # ذخیره تاریخچه آموزش
+            self.training_history.append({
+                'timestamp': datetime.now().isoformat(),
+                'samples': len(X),
+                'features': len(X.columns),
+                'accuracy': train_accuracy,
+                'f1_score': f1,
+                'training_time': training_time
+            })
+            
+            logger.info(f"{self.model_name} model trained with accuracy: {train_accuracy:.4f}, F1: {f1:.4f}")
+            print(f"{self.model_name} model trained with accuracy: {train_accuracy:.4f}, F1: {f1:.4f}")
+            return True
+        except Exception as e:
+            logger.error(f"Error training {self.model_name} model: {e}")
+            print(f"Error training {self.model_name} model: {e}")
+            return False
+            
     def predict(self, X):
         """
-        پیش‌بینی با مدل متخصص
+        پیش‌بینی با استفاده از مدل آموزش دیده
         
         Args:
-            X: داده‌های ورودی
+            X: فیچرهای ورودی (DataFrame)
             
         Returns:
-            کلاس پیش‌بینی شده و احتمالات
+            (predictions, probabilities): پیش‌بینی‌ها و احتمالات کلاس‌ها
         """
         if self.model is None:
-            raise ValueError(f"{self.name} model has not been trained yet")
+            logger.warning(f"{self.model_name} model not trained yet")
+            raise ValueError(f"{self.model_name} model not trained yet")
             
-        if isinstance(X, pd.DataFrame):
-            # اطمینان از وجود تمام فیچرهای مورد نیاز
-            missing_features = [f for f in self.feature_names if f not in X.columns]
-            extra_features = [f for f in X.columns if f not in self.feature_names]
-            
-            if missing_features:
-                # ایجاد فیچرهای گمشده با مقدار صفر
-                for f in missing_features:
-                    X[f] = 0
-                    
-            # انتخاب فقط فیچرهای مورد نیاز
-            X = X[self.feature_names]
-        else:
-            # تبدیل آرایه NumPy به DataFrame
-            X = pd.DataFrame([X], columns=self.feature_names)
-            
-        # حذف مقادیر NaN و inf
-        X = X.replace([np.inf, -np.inf], np.nan)
-        X = X.fillna(0)
-        
-        # نرمال‌سازی
-        X_scaled = self.scaler.transform(X)
+        # پیش‌پردازش فیچرها
+        X_scaled = self.preprocess_features(X)
         
         # پیش‌بینی
-        y_pred = self.model.predict(X_scaled)
-        
-        # احتمالات کلاس‌ها
         try:
-            probas = self.model.predict_proba(X_scaled)
-        except:
-            # اگر مدل predict_proba را پشتیبانی نکند
-            probas = np.zeros((len(y_pred), 3))
-            probas[np.arange(len(y_pred)), y_pred] = 1
-            
-        return y_pred, probas
-    
-    def save(self, directory='model/specialists'):
-        """ذخیره مدل متخصص"""
-        os.makedirs(directory, exist_ok=True)
-        file_path = os.path.join(directory, f"{self.name}.pkl")
-        
-        model_data = {
-            'name': self.name,
-            'feature_group': self.feature_group,
-            'model': self.model,
-            'scaler': self.scaler,
-            'feature_names': self.feature_names,
-            'training_date': self.training_date,
-            'accuracy': self.accuracy,
-            'f1_score': self.f1_score,
-            'confusion_matrix': self.confusion_matrix
-        }
-        
-        with open(file_path, 'wb') as f:
-            pickle.dump(model_data, f)
-            
-        print(f"{self.name} model saved to {file_path}")
-        return file_path
-    
-    def load(self, directory='model/specialists'):
-        """بارگذاری مدل متخصص"""
-        file_path = os.path.join(directory, f"{self.name}.pkl")
-        
-        if not os.path.exists(file_path):
-            print(f"Model file not found: {file_path}")
-            return False
-            
-        try:
-            with open(file_path, 'rb') as f:
-                model_data = pickle.load(f)
-                
-            self.name = model_data.get('name', self.name)
-            self.feature_group = model_data.get('feature_group', self.feature_group)
-            self.model = model_data.get('model')
-            self.scaler = model_data.get('scaler')
-            self.feature_names = model_data.get('feature_names')
-            self.training_date = model_data.get('training_date')
-            self.accuracy = model_data.get('accuracy')
-            self.f1_score = model_data.get('f1_score')
-            self.confusion_matrix = model_data.get('confusion_matrix')
-            
-            print(f"{self.name} model loaded from {file_path}")
-            if self.training_date:
-                print(f"Training date: {self.training_date}")
-            if self.accuracy:
-                print(f"Accuracy: {self.accuracy:.4f}, F1: {self.f1_score:.4f}")
-                
-            return True
-        
+            predictions = self.model.predict(X_scaled)
+            probabilities = self.model.predict_proba(X_scaled)
+            return predictions, probabilities
         except Exception as e:
-            print(f"Error loading model: {e}")
+            logger.error(f"Error predicting with {self.model_name} model: {e}")
+            raise
+            
+    def save(self):
+        """ذخیره مدل در فایل"""
+        if self.model is None:
+            logger.warning(f"Cannot save {self.model_name} model: model not trained")
             return False
-    
-    def get_required_features(self):
-        """دریافت لیست فیچرهای مورد نیاز"""
-        return self.feature_names if self.feature_names else []
+            
+        try:
+            os.makedirs(os.path.dirname(self.model_file), exist_ok=True)
+            
+            # ذخیره مدل و scaler
+            with open(self.model_file, 'wb') as f:
+                pickle.dump({
+                    'model': self.model,
+                    'scaler': self.scaler,
+                    'training_history': self.training_history,
+                    'last_updated': datetime.now().isoformat()
+                }, f)
+                
+            logger.info(f"{self.model_name} model saved to {self.model_file}")
+            print(f"{self.model_name} model saved to {self.model_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving {self.model_name} model: {e}")
+            print(f"Error saving {self.model_name} model: {e}")
+            return False
+            
+    def load(self):
+        """بارگیری مدل از فایل"""
+        if not os.path.exists(self.model_file):
+            logger.warning(f"{self.model_name} model file not found: {self.model_file}")
+            return self
+            
+        try:
+            with open(self.model_file, 'rb') as f:
+                data = pickle.load(f)
+                self.model = data['model']
+                self.scaler = data.get('scaler')  # ممکن است در مدل‌های قدیمی‌تر موجود نباشد
+                self.training_history = data.get('training_history', [])
+                
+            logger.info(f"{self.model_name} model loaded from {self.model_file}")
+            return self
+        except Exception as e:
+            logger.error(f"Error loading {self.model_name} model: {e}")
+            return self
