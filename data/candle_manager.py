@@ -1,96 +1,73 @@
-import pymysql
+"""
+مدیریت کننده داده‌های کندل‌استیک
+"""
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import logging
+import mysql.connector
 from utils.config import DB_CONFIG
-from data.fetch_online import fetch_candles_binance
 
-def get_latest_candles(symbol, limit=200):
-    conn = pymysql.connect(**DB_CONFIG)
-    try:
-        if limit is None:
-            query = "SELECT * FROM candles WHERE symbol=%s ORDER BY timestamp DESC"
-            df = pd.read_sql(query, conn, params=[symbol])
-        else:
-            query = "SELECT * FROM candles WHERE symbol=%s ORDER BY timestamp DESC LIMIT %s"
-            df = pd.read_sql(query, conn, params=[symbol, limit])
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        return df
-    finally:
-        conn.close()
+logger = logging.getLogger("candle_manager")
 
-def save_candles_to_db(candles):
-    if isinstance(candles, pd.DataFrame):
-        candles = candles.to_dict(orient="records")
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        with conn.cursor() as cursor:
-            for c in candles:
-                query = """
-                    INSERT IGNORE INTO candles (symbol, timestamp, open, high, low, close, volume)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(query, (c["symbol"], c["timestamp"], c["open"], c["high"], c["low"], c["close"], c["volume"]))
-            conn.commit()
-    finally:
-        conn.close()
-
-def keep_last_200_candles(symbol):
+def get_latest_candles(symbol, limit=None):
     """
-    فقط بررسی تعداد کندل‌ها بدون حذف هیچ داده‌ای
-    """
-    try:
-        from utils.config import DB_CONFIG
-        import pymysql
-        
-        conn = pymysql.connect(
-            host=DB_CONFIG["host"],
-            user=DB_CONFIG["user"],
-            password=DB_CONFIG["password"],
-            database=DB_CONFIG["database"],
-            port=DB_CONFIG["port"]
-        )
-        
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM candles WHERE symbol = %s", (symbol,))
-        count = cursor.fetchone()[0]
-        conn.close()
-        
-        print(f"Symbol {symbol} has {count} historical candles in database")
-        return count
-        
-    except Exception as e:
-        print(f"Error in keep_last_200_candles: {e}")
-        return 0
-    
-# اضافه کردن این تابع به فایل موجود
-def get_historical_candles(symbol, limit=10000):
-    """
-    دریافت داده‌های تاریخی کندل از دیتابیس
+    دریافت آخرین کندل‌ها از دیتابیس
     
     Args:
-        symbol: نماد مورد نظر
-        limit: تعداد کندل‌ها
+        symbol: نماد ارز
+        limit: محدودیت تعداد کندل‌ها (اگر None باشد، همه کندل‌ها برگردانده می‌شوند)
         
     Returns:
-        DataFrame حاوی کندل‌ها
+        DataFrame: داده‌های کندل‌استیک
     """
-    import mysql.connector
-    import pandas as pd
-    
-    conn = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='',
-        database='tradebot-pro'
-    )
-    
-    query = """
-    SELECT * FROM candles 
-    WHERE symbol = %s 
-    ORDER BY timestamp DESC 
-    LIMIT %s
-    """
-    
-    df = pd.read_sql(query, conn, params=[symbol, limit])
-    conn.close()
-    
-    return df    
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+        
+        # استفاده از تمام داده‌های موجود اگر limit مشخص نشده باشد
+        if limit is None:
+            query = """
+            SELECT * FROM candles 
+            WHERE symbol = %s 
+            ORDER BY timestamp ASC
+            """
+            cursor.execute(query, (symbol,))
+        else:
+            query = """
+            SELECT * FROM candles 
+            WHERE symbol = %s 
+            ORDER BY timestamp DESC 
+            LIMIT %s
+            """
+            cursor.execute(query, (symbol, limit))
+            
+        rows = cursor.fetchall()
+        
+        # بازگرداندن به ترتیب زمانی اگر limit تعیین شده باشد
+        if limit is not None:
+            rows.reverse()
+            
+        if not rows:
+            logger.warning(f"No candle data found for {symbol}")
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(rows)
+        
+        # تبدیل timestamp به datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # مرتب‌سازی بر اساس زمان
+        df = df.sort_values('timestamp')
+        
+        logger.info(f"Loaded {len(df)} candles for {symbol}")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading candle data for {symbol}: {e}")
+        return pd.DataFrame()
+        
+    finally:
+        if 'conn' in locals() and conn.is_connected():
+            cursor.close()
+            conn.close()
