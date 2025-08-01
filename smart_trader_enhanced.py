@@ -1,5 +1,5 @@
 """
-راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته (نسخه اصلاح شده)
+راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته با پشتیبانی از آموزش چندارزی
 """
 import argparse
 import time
@@ -40,124 +40,147 @@ def start_trading_system(symbols=['BTCUSDT', 'ETHUSDT']):
     orchestrator.start()
     return orchestrator
 
-def prepare_historical_training_data(symbol):
+def prepare_historical_training_data_multi(symbols=['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'DOGEUSDT']):
     """
-    آماده‌سازی داده‌های تاریخی برای آموزش با استفاده از تکنیک‌های پیشرفته
+    آماده‌سازی داده‌های تاریخی برای آموزش با استفاده از چندین ارز
+    
+    Args:
+        symbols: لیست ارزهای دیجیتالی که باید آموزش داده شوند
+        
+    Returns:
+        DataFrame: داده‌های آموزشی ترکیب‌شده از چندین ارز
     """
     from data.candle_manager import get_latest_candles
     from data.news_manager import get_latest_news
     from feature_engineering.feature_engineer import build_features
     
-    print(f"Loading historical data for {symbol}...")
-    
-    # استفاده بهینه از داده‌های موجود بر اساس نوع ارز
-    if symbol in ["BTCUSDT", "ETHUSDT"]:
-        candles_limit = 15000  # برای بیت‌کوین و اتریوم که ~17000 کندل داریم
-        news_limit = 2500  # برای اخبار بیت‌کوین و اتریوم
-    else:
-        candles_limit = 10000  # برای سایر ارزها
-        news_limit = 2000  # برای سایر ارزها
-        
-    candles = get_latest_candles(symbol, candles_limit)
-    news = get_latest_news(symbol, news_limit)
-    
-    if candles.empty:
-        print(f"Error: No candle data available for {symbol}")
-        return None
-    
-    # بررسی تغییرات قیمت در داده‌های تاریخی
-    candles['pct_change'] = candles['close'].pct_change()
-    price_changes = candles['pct_change'].dropna()
-    
-    print(f"Data loaded: {len(candles)} candles and {len(news)} news items")
-    print(f"Price change statistics: min={price_changes.min():.4f}, max={price_changes.max():.4f}, mean={price_changes.mean():.4f}, std={price_changes.std():.4f}")
-    
-    # حذف داده‌های با تغییرات بیش از حد (احتمالاً خطا)
-    candles = candles[candles['pct_change'].abs() < 0.2]  # حذف تغییرات بیش از 20%
-    
-    print("Building features...")
-    # ساخت فیچرها
-    features = build_features(candles, news, symbol)
-    
-    print("Creating target variables with multiple prediction horizons...")
-    
-    # دسته‌بندی داده‌ها به گروه‌های زمانی برای حفظ تنوع
-    time_periods = []
-    # تقسیم داده‌ها به 5 دوره زمانی (برای تنوع بیشتر)
-    period_size = len(candles) // 5
-    for i in range(5):
-        start_idx = i * period_size
-        end_idx = (i + 1) * period_size
-        time_periods.append((start_idx, end_idx))
-    
-    # افق‌های پیش‌بینی متنوع
-    # کوتاه، متوسط و بلندمدت
-    prediction_horizons = [1, 3, 6, 12, 24]
-    
-    # آستانه‌های متفاوت برای طبقه‌بندی
-    # شروع با آستانه‌های کوچک‌تر برای اطمینان از تنوع کلاس‌ها
-    threshold_pairs = [
-        (-0.002, 0.002),  # بسیار حساس: 0.2% تغییر قیمت
-        (-0.005, 0.005),  # استاندارد: 0.5% تغییر قیمت
-        (-0.01, 0.01),    # تهاجمی: 1% تغییر قیمت
-    ]
-    
     all_training_data = []
     
-    # ایجاد نمونه‌های آموزشی با افق‌ها و آستانه‌های مختلف
-    for period_start, period_end in time_periods:
-        period_candles = candles.iloc[period_start:period_end].copy()
-        period_features = features.iloc[period_start:period_end].copy()
+    for symbol in symbols:
+        print(f"\n=== آماده‌سازی داده‌های تاریخی برای {symbol} ===")
         
-        print(f"Processing time period with {len(period_candles)} candles")
+        # استفاده بهینه از داده‌های موجود بر اساس نوع ارز
+        if symbol in ["BTCUSDT", "ETHUSDT"]:
+            candles_limit = 15000
+            news_limit = 2500
+        else:
+            candles_limit = 10000
+            news_limit = 2000
+            
+        candles = get_latest_candles(symbol, candles_limit)
+        news = get_latest_news(symbol, news_limit)
         
-        for horizon in prediction_horizons:
-            for neg_threshold, pos_threshold in threshold_pairs:
-                # محاسبه بازدهی آینده
-                period_features[f'future_price_{horizon}'] = period_candles['close'].shift(-horizon)
-                period_features[f'future_pct_change_{horizon}'] = (
-                    period_features[f'future_price_{horizon}'] / period_candles['close'] - 1
-                )
-                
-                # طبقه‌بندی به سه گروه با آستانه‌های متفاوت
-                bins = [-float('inf'), neg_threshold, pos_threshold, float('inf')]
-                labels = [0, 1, 2]  # Sell, Hold, Buy
-                period_features['target'] = pd.cut(period_features[f'future_pct_change_{horizon}'], 
-                                                 bins=bins, labels=labels)
-                
-                # حذف ردیف‌های بدون مقدار هدف
-                valid_data = period_features.dropna(subset=['target']).copy()
-                
-                if not valid_data.empty:
-                    # تبدیل به عدد صحیح
-                    valid_data['target'] = valid_data['target'].astype(int)
+        if candles.empty:
+            print(f"Error: No candle data available for {symbol}")
+            continue
+        
+        # بررسی تغییرات قیمت در داده‌های تاریخی
+        candles['pct_change'] = candles['close'].pct_change()
+        price_changes = candles['pct_change'].dropna()
+        
+        print(f"Data loaded: {len(candles)} candles and {len(news)} news items")
+        print(f"Price change statistics: min={price_changes.min():.4f}, max={price_changes.max():.4f}, mean={price_changes.mean():.4f}, std={price_changes.std():.4f}")
+        
+        # حذف داده‌های با تغییرات بیش از حد (احتمالاً خطا)
+        candles = candles[candles['pct_change'].abs() < 0.2]  # حذف تغییرات بیش از 20%
+        
+        print("Building features...")
+        # ساخت فیچرها
+        features = build_features(candles, news, symbol)
+        
+        # اضافه کردن ستون نماد برای تشخیص منبع داده
+        features['symbol'] = symbol
+        
+        print("Creating target variables with multiple prediction horizons...")
+        
+        # دسته‌بندی داده‌ها به گروه‌های زمانی برای حفظ تنوع
+        time_periods = []
+        # تقسیم داده‌ها به 5 دوره زمانی (برای تنوع بیشتر)
+        period_size = len(candles) // 5
+        for i in range(5):
+            start_idx = i * period_size
+            end_idx = (i + 1) * period_size
+            time_periods.append((start_idx, end_idx))
+        
+        # افق‌های پیش‌بینی متنوع
+        prediction_horizons = [1, 3, 6, 12, 24]
+        
+        # آستانه‌های متفاوت برای طبقه‌بندی
+        threshold_pairs = [
+            (-0.002, 0.002),  # بسیار حساس: 0.2% تغییر قیمت
+            (-0.005, 0.005),  # استاندارد: 0.5% تغییر قیمت
+            (-0.01, 0.01),    # تهاجمی: 1% تغییر قیمت
+        ]
+        
+        symbol_training_data = []
+        
+        # ایجاد نمونه‌های آموزشی با افق‌ها و آستانه‌های مختلف
+        for period_start, period_end in time_periods:
+            period_candles = candles.iloc[period_start:period_end].copy()
+            period_features = features.iloc[period_start:period_end].copy()
+            
+            print(f"Processing time period with {len(period_candles)} candles")
+            
+            for horizon in prediction_horizons:
+                for neg_threshold, pos_threshold in threshold_pairs:
+                    # محاسبه بازدهی آینده
+                    period_features[f'future_price_{horizon}'] = period_candles['close'].shift(-horizon)
+                    period_features[f'future_pct_change_{horizon}'] = (
+                        period_features[f'future_price_{horizon}'] / period_candles['close'] - 1
+                    )
                     
-                    # اضافه کردن ستون افق و آستانه برای ردیابی
-                    valid_data['prediction_horizon'] = horizon
-                    valid_data['threshold_negative'] = neg_threshold
-                    valid_data['threshold_positive'] = pos_threshold
+                    # طبقه‌بندی به سه گروه با آستانه‌های متفاوت
+                    bins = [-float('inf'), neg_threshold, pos_threshold, float('inf')]
+                    labels = [0, 1, 2]  # Sell, Hold, Buy
+                    period_features['target'] = pd.cut(period_features[f'future_pct_change_{horizon}'], 
+                                                     bins=bins, labels=labels)
                     
-                    # افزودن به داده‌های آموزشی
-                    all_training_data.append(valid_data)
+                    # حذف ردیف‌های بدون مقدار هدف
+                    valid_data = period_features.dropna(subset=['target']).copy()
                     
-                    # گزارش توزیع کلاس‌ها برای این افق و آستانه
-                    class_counts = valid_data['target'].value_counts()
-                    print(f"Horizon {horizon}, Thresholds {neg_threshold}/{pos_threshold}: {class_counts.to_dict()}")
+                    if not valid_data.empty:
+                        # تبدیل به عدد صحیح
+                        valid_data['target'] = valid_data['target'].astype(int)
+                        
+                        # اضافه کردن ستون افق و آستانه برای ردیابی
+                        valid_data['prediction_horizon'] = horizon
+                        valid_data['threshold_negative'] = neg_threshold
+                        valid_data['threshold_positive'] = pos_threshold
+                        
+                        # افزودن به داده‌های آموزشی
+                        symbol_training_data.append(valid_data)
+                        
+                        # گزارش توزیع کلاس‌ها برای این افق و آستانه
+                        class_counts = valid_data['target'].value_counts()
+                        print(f"Horizon {horizon}, Thresholds {neg_threshold}/{pos_threshold}: {class_counts.to_dict()}")
+        
+        # ترکیب تمام داده‌های این نماد
+        if symbol_training_data:
+            final_symbol_data = pd.concat(symbol_training_data)
+            
+            # حذف ستون‌های اضافی محاسبه شده
+            drop_columns = []
+            for horizon in prediction_horizons:
+                drop_columns.extend([f'future_price_{horizon}', f'future_pct_change_{horizon}'])
+            
+            final_symbol_data = final_symbol_data.drop(drop_columns, axis=1, errors='ignore')
+            
+            # بررسی توزیع نهایی
+            symbol_class_counts = final_symbol_data['target'].value_counts()
+            print(f"\nClass distribution for {symbol} before balancing:")
+            for cls, count in symbol_class_counts.items():
+                print(f"Class {cls}: {count} samples ({count/len(final_symbol_data)*100:.1f}%)")
+            
+            # افزودن به داده‌های کلی
+            all_training_data.append(final_symbol_data)
     
-    # ترکیب تمام داده‌ها
+    # ترکیب داده‌های تمام نمادها
     if all_training_data:
         final_training_data = pd.concat(all_training_data)
         
-        # حذف ستون‌های اضافی محاسبه شده
-        drop_columns = []
-        for horizon in prediction_horizons:
-            drop_columns.extend([f'future_price_{horizon}', f'future_pct_change_{horizon}'])
-        
-        final_training_data = final_training_data.drop(drop_columns, axis=1, errors='ignore')
-        
-        # بررسی توزیع نهایی
+        # بررسی توزیع نهایی کل داده‌ها
         final_class_counts = final_training_data['target'].value_counts()
-        print("\nFinal class distribution before balancing:")
+        print("\nFinal class distribution before balancing (all symbols):")
         for cls, count in final_class_counts.items():
             print(f"Class {cls}: {count} samples ({count/len(final_training_data)*100:.1f}%)")
         
@@ -172,12 +195,10 @@ def prepare_historical_training_data(symbol):
             base_samples = final_training_data.copy()
             
             # حذف ستون‌های پیش‌بینی افق و آستانه
-            if 'prediction_horizon' in base_samples.columns:
-                base_samples = base_samples.drop(['prediction_horizon'], axis=1)
-            if 'threshold_negative' in base_samples.columns:
-                base_samples = base_samples.drop(['threshold_negative'], axis=1)
-            if 'threshold_positive' in base_samples.columns:
-                base_samples = base_samples.drop(['threshold_positive'], axis=1)
+            cols_to_drop = ['prediction_horizon', 'threshold_negative', 'threshold_positive', 'symbol']
+            drop_cols = [col for col in cols_to_drop if col in base_samples.columns]
+            if drop_cols:
+                base_samples = base_samples.drop(drop_cols, axis=1)
             
             # یافتن ستون‌های عددی که می‌توانیم تغییر دهیم
             numeric_columns = base_samples.select_dtypes(include=['float64', 'int64']).columns.tolist()
@@ -216,6 +237,7 @@ def prepare_historical_training_data(symbol):
                     # تغییر برچسب کلاس
                     synthetic_class['target'] = cls
                     
+                    # افزودن نمونه‌های مصنوعی
                     synthetic_samples.append(synthetic_class)
             
             # افزودن نمونه‌های مصنوعی به داده‌های اصلی
@@ -232,25 +254,26 @@ def prepare_historical_training_data(symbol):
         if len(final_class_counts) > 1:
             # برای هر کلاس
             balanced_dfs = []
-            target_min_samples = 300
+            
+            # تعداد نمونه‌های هدف برای هر کلاس
+            target_samples = 300
             
             for cls in range(3):  # 0, 1, 2 = Sell, Hold, Buy
                 if cls in final_class_counts:
                     cls_data = final_training_data[final_training_data['target'] == cls]
                     cls_count = len(cls_data)
                     
-                    if cls_count < target_min_samples:
+                    if cls_count < target_samples:
                         # اگر تعداد نمونه‌ها کمتر از حداقل است، نمونه‌گیری مجدد با جایگذاری
-                        # مطمئن شویم که حداقل یک نمونه داریم
                         if cls_count > 0:
                             resampled = resample(
                                 cls_data,
                                 replace=True,
-                                n_samples=target_min_samples,
+                                n_samples=target_samples,
                                 random_state=42
                             )
                             balanced_dfs.append(resampled)
-                            print(f"Class {cls} upsampled: {cls_count} -> {target_min_samples}")
+                            print(f"Class {cls} upsampled: {cls_count} -> {target_samples}")
                     else:
                         # اگر تعداد نمونه‌ها کافی است، بدون تغییر استفاده کنید
                         balanced_dfs.append(cls_data)
@@ -272,11 +295,11 @@ def prepare_historical_training_data(symbol):
             count = balanced_counts[cls]
             print(f"Class {cls} ({class_names[cls]}): {count} samples ({count/len(balanced_training_data)*100:.1f}%)")
         
-        print(f"\nFinal training dataset size: {len(balanced_training_data)} samples")
+        print(f"\nFinal training dataset size: {len(balanced_training_data)} samples with data from {len(symbols)} symbols")
         
         return balanced_training_data
     else:
-        print("Error: Could not prepare any valid training data")
+        print("Error: Could not prepare any valid training data from any symbol")
         return None
 
 def main():
@@ -288,6 +311,8 @@ def main():
     parser.add_argument('--symbol', default='BTCUSDT', help='Symbol for feature monitor')
     parser.add_argument('--interval', type=int, default=1, help='Update interval in seconds')
     parser.add_argument('--train', action='store_true', help='Train specialist models')
+    parser.add_argument('--train-all', action='store_true', help='Train on all supported symbols at once')
+    parser.add_argument('--demo-balance', type=float, default=10000, help='Initial balance for demo trading account (USDT)')
     
     args = parser.parse_args()
     
@@ -313,11 +338,12 @@ def main():
         services.append(monitor)
     
     if args.trading:
-        print(f"Starting trading system for {args.symbols}...")
+        print(f"Starting trading system for {args.symbols} with demo balance: {args.demo_balance} USDT...")
         orchestrator = start_trading_system(args.symbols)
+        orchestrator.set_demo_balance(args.demo_balance)  # تنظیم موجودی حساب دمو
         services.append(orchestrator)
     
-    if args.train:
+    if args.train or args.train_all:
         print("Starting model training...")
         from specialist_models.moving_averages_model import MovingAveragesModel
         from specialist_models.oscillators_model import OscillatorsModel
@@ -328,10 +354,19 @@ def main():
         from meta_model.model_combiner import ModelCombiner
         from feature_selection.feature_groups import FEATURE_GROUPS
         
-        symbol = args.symbol
-        
-        # استفاده از تابع پیشرفته آماده‌سازی داده‌های تاریخی
-        features = prepare_historical_training_data(symbol)
+        if args.train_all:
+            # آموزش روی همه ارزها به‌صورت یکجا
+            all_symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'DOGEUSDT']
+            print(f"Training on all symbols: {', '.join(all_symbols)}")
+            features = prepare_historical_training_data_multi(all_symbols)
+        else:
+            # آموزش فقط روی یک ارز
+            symbol = args.symbol
+            print(f"Training on single symbol: {symbol}")
+            
+            # از تابع قدیمی استفاده می‌کنیم
+            from smart_trader_enhanced import prepare_historical_training_data
+            features = prepare_historical_training_data(symbol)
         
         if features is None or features.empty:
             print("Error: Failed to prepare training data. Exiting.")
@@ -344,7 +379,7 @@ def main():
             'volatility': VolatilityModel(),
             'candlestick': CandlestickModel(),
             'news': NewsModel(),
-            'advanced_patterns': AdvancedPatternsModel()  # افزودن مدل جدید
+            'advanced_patterns': AdvancedPatternsModel()
         }
         
         for name, model in specialist_models.items():
@@ -408,13 +443,14 @@ def main():
         else:
             print("Warning: No meta-features available for meta-model training")
     
-    if not (args.feature_calc or args.monitor or args.trading or args.train):
+    if not (args.feature_calc or args.monitor or args.trading or args.train or args.train_all):
         # اجرای همه سرویس‌ها با تنظیمات پیش‌فرض
         print("Starting all services with default settings...")
         calculator = start_feature_calculator(args.symbols, args.interval)
         services.append(calculator)
         
         orchestrator = start_trading_system(args.symbols)
+        orchestrator.set_demo_balance(args.demo_balance)  # تنظیم موجودی حساب دمو
         services.append(orchestrator)
         
         monitor = start_feature_monitor(args.symbols[0], 5)
@@ -422,11 +458,12 @@ def main():
     
     # نمایش راهنمای استفاده
     print("\n====== How to use Enhanced Smart Trading Bot ======")
-    print("- For feature calculation only: python smart_trader_enhanced.py --feature-calc")
-    print("- For feature monitoring: python smart_trader_enhanced.py --monitor --symbol BTCUSDT --interval 5")
-    print("- For trading system: python smart_trader_enhanced.py --trading")
-    print("- For training models: python smart_trader_enhanced.py --train --symbol BTCUSDT")
-    print("- To run all components: python smart_trader_enhanced.py")
+    print("- For feature calculation only: python smart_trader_enhanced_multi.py --feature-calc")
+    print("- For feature monitoring: python smart_trader_enhanced_multi.py --monitor --symbol BTCUSDT --interval 5")
+    print("- For trading system: python smart_trader_enhanced_multi.py --trading --demo-balance 10000")
+    print("- For training on a single symbol: python smart_trader_enhanced_multi.py --train --symbol BTCUSDT")
+    print("- For training on all symbols at once: python smart_trader_enhanced_multi.py --train-all")
+    print("- To run all components: python smart_trader_enhanced_multi.py")
     print("======================================================\n")
     
     try:
