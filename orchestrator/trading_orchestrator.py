@@ -77,7 +77,7 @@ class TradingOrchestrator:
         self.taker_fee = 0.00075  # 0.075%
         
         # آستانه اطمینان برای اجرای معاملات
-        self.confidence_threshold = 65.0  # حداقل اطمینان برای اجرای معامله (درصد)
+        self.confidence_threshold = 70.0  # حداقل اطمینان برای اجرای معامله (درصد)
         
     def set_demo_balance(self, balance):
         """تنظیم موجودی حساب دمو"""
