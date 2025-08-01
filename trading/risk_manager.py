@@ -25,9 +25,9 @@ class RiskManager:
         self.daily_pnl = {}            # سود و زیان روزانه
         self.recent_trades = []        # معاملات اخیر
         self.confidence_factors = {    # ضرایب اطمینان برای انواع سیگنال
-            0: 0.9,  # Sell
+            0: 0.7,  # Sell
             1: 0.0,  # Hold
-            2: 0.9   # Buy
+            2: 0.7   # Buy
         }
     
     def get_position_risk(self, symbol, decision_type):
