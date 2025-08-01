@@ -80,7 +80,7 @@ def get_historical_candles(symbol, limit=10000):
         host='localhost',
         user='root',
         password='',
-        database='database'
+        database='tradebot-pro'
     )
     
     query = """
