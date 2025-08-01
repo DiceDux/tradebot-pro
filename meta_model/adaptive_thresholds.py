@@ -113,6 +113,11 @@ class AdaptiveThresholds:
             
         thresholds = self.current_thresholds[symbol]
         
+        # دریافت روند بازار برای این نماد
+        trend = 0.0  # پیش‌فرض: روند خنثی
+        if symbol in self.market_conditions:
+            trend = self.market_conditions[symbol]['trend']
+        
         # کاهش احتمال سیگنال هولد (افزایش خرید/فروش)
         adjusted_probs = probabilities.copy()
         hold_reduction = 0.1
