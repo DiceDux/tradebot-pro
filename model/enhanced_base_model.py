@@ -203,36 +203,48 @@ class EnhancedBaseModel:
             raise
     
     def predict(self, X):
-        """پیش‌بینی کلاس، احتمالات و اطمینان"""
-        if self.model is None:
-            raise ValueError("Model not loaded or trained!")
-            
-        if isinstance(X, pd.DataFrame):
-            # اطمینان از اینکه همه فیچرهای مورد نیاز وجود دارند
-            features_to_use = self.get_feature_names()
-            missing_features = set(features_to_use) - set(X.columns)
-            if missing_features:
-                # اضافه کردن فیچرهای گم‌شده با مقدار 0
-                for f in missing_features:
-                    X[f] = 0
-            
-            # استفاده فقط از فیچرهای موجود در مدل
-            available_features = [f for f in features_to_use if f in X.columns]
-            X = X[available_features]
+        """
+        پیش‌بینی با استفاده از مدل پایه - بهینه‌سازی شده برای رفع هشدار DataFrame is highly fragmented
+        """
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame([X])
         
-        # پیش‌بینی
-        pred_proba = self.model.predict_proba(X)
+        # روش بهینه: ساخت یک دیکشنری از همه فیچرهای مورد نیاز
+        feature_data = {}
         
-        # اطمینان از اینکه خروجی‌ها اسکالر هستند (برای رفع هشدار NumPy)
-        pred_class_idx = np.argmax(pred_proba, axis=1)
-        pred_class = np.array([int(idx) for idx in pred_class_idx])  # تبدیل صحیح به اسکالر
+        # بررسی فیچرهای موجود و اضافه کردن فیچرهای گمشده
+        for feature in self.feature_names:
+            if feature in X.columns:
+                feature_data[feature] = X[feature].values
+            else:
+                # برای فیچرهای گمشده مقدار صفر قرار می‌دهیم
+                feature_data[feature] = np.zeros(X.shape[0])
         
-        # محاسبه اطمینان (تفاوت بین بیشترین و دومین احتمال)
-        confidences = []
-        for probs in pred_proba:
-            sorted_probs = np.sort(probs)
-            # اگر فقط یک کلاس با احتمال بالا وجود داشته باشد، اطمینان بالاست
-            confidence = sorted_probs[-1] - (sorted_probs[-2] if len(sorted_probs) > 1 else 0)
-            confidences.append(float(confidence))  # تبدیل به اسکالر
+        # ساخت DataFrame جدید با تمام فیچرها به‌طور یکجا
+        X_clean = pd.DataFrame(feature_data)
         
-        return pred_class, pred_proba, np.array(confidences)
+        # اطمینان از ترتیب درست فیچرها
+        X_clean = X_clean[self.feature_names]
+        
+        # نرمال‌سازی داده‌ها
+        if self.scaler:
+            X_scaled = self.scaler.transform(X_clean)
+        else:
+            X_scaled = X_clean.values
+        
+        # پیش‌بینی با استفاده از مدل
+        y_pred = self.model.predict(X_scaled)
+        
+        # دریافت احتمالات هر کلاس
+        try:
+            probas = self.model.predict_proba(X_scaled)
+        except:
+            probas = None
+        
+        # محاسبه اطمینان پیش‌بینی
+        if probas is not None:
+            confidence = np.max(probas, axis=1)
+        else:
+            confidence = np.ones(len(y_pred))
+        
+        return y_pred, probas, confidence

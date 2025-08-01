@@ -11,7 +11,21 @@ torch
 tensorflow 
 imblearn 
 scikit-learn
- 
+tabulate 
+mysql-connector-python 
+
 #python smart_trader.py --train_base
 #python smart_trader.py --backtest
 #python smart_trader.py
+# برای آموزش مدل
+#python smart_trader_cli.py --train_base
+
+# برای اجرای معامله‌گر
+#python smart_trader_cli.py
+
+# برای اجرای بک‌تست
+#python smart_trader_cli.py --backtest
+#python run_backtest_silent.py
+#python smart_trader_cli.py --live
+#python smart_trader_cli.py --prepare_data
+#python feature_monitor.py BTCUSDT 5
