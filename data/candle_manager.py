@@ -60,3 +60,37 @@ def keep_last_200_candles(symbol):
     except Exception as e:
         print(f"Error in keep_last_200_candles: {e}")
         return 0
+    
+# اضافه کردن این تابع به فایل موجود
+def get_historical_candles(symbol, limit=10000):
+    """
+    دریافت داده‌های تاریخی کندل از دیتابیس
+    
+    Args:
+        symbol: نماد مورد نظر
+        limit: تعداد کندل‌ها
+        
+    Returns:
+        DataFrame حاوی کندل‌ها
+    """
+    import mysql.connector
+    import pandas as pd
+    
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='database'
+    )
+    
+    query = """
+    SELECT * FROM candles 
+    WHERE symbol = %s 
+    ORDER BY timestamp DESC 
+    LIMIT %s
+    """
+    
+    df = pd.read_sql(query, conn, params=[symbol, limit])
+    conn.close()
+    
+    return df    
