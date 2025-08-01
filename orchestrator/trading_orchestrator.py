@@ -72,6 +72,13 @@ class TradingOrchestrator:
         self.trailing_activation = 1.01  # فعال‌سازی تریلینگ استاپ (درصد)
         self.trailing_distance = 0.005  # فاصله تریلینگ استاپ (درصد)
         
+        # نرخ کارمزد معاملات (مقدار واقعی صرافی‌های معتبر)
+        self.maker_fee = 0.00075  # 0.075%
+        self.taker_fee = 0.00075  # 0.075%
+        
+        # آستانه اطمینان برای اجرای معاملات
+        self.confidence_threshold = 65.0  # حداقل اطمینان برای اجرای معامله (درصد)
+        
     def set_demo_balance(self, balance):
         """تنظیم موجودی حساب دمو"""
         self.demo_account = DemoAccount(balance)
@@ -286,6 +293,121 @@ class TradingOrchestrator:
             except Exception as e:
                 logger.error(f"Error processing active position for {symbol}: {e}")
                 
+    def _calculate_commission(self, price, size):
+        """محاسبه کارمزد معامله"""
+        # فرض: استفاده از نرخ taker برای محاسبه کارمزد (محافظه‌کارانه‌تر)
+        return price * size * self.taker_fee
+    
+    def _calculate_market_volatility(self, symbol, features):
+        """محاسبه نوسان‌پذیری بازار"""
+        try:
+            # استفاده از ATR و Bollinger Band Width برای محاسبه نوسان
+            if 'atr14' in features.columns and 'close' in features.columns:
+                atr = features['atr14'].iloc[0]
+                price = features['close'].iloc[0]
+                atr_pct = atr / price
+                
+                # استفاده از باند بولینگر اگر موجود باشد
+                if 'bb_width' in features.columns:
+                    bb_width = features['bb_width'].iloc[0]
+                    # ترکیب ATR و BB Width
+                    return (atr_pct * 50 + bb_width * 50) / 100
+                
+                # در غیر این صورت فقط از ATR استفاده کنید
+                return atr_pct
+            elif 'volatility' in features.columns:
+                # استفاده از فیچر volatility اگر موجود باشد
+                return features['volatility'].iloc[0]
+            else:
+                # در صورت عدم وجود فیچرهای مورد نیاز، مقدار پیش‌فرض متوسط
+                return 0.02  # 2% نوسان پیش‌فرض
+        except Exception as e:
+            logger.error(f"Error calculating market volatility: {e}")
+            return 0.02  # مقدار پیش‌فرض در صورت خطا
+    
+    def _calculate_market_trend(self, symbol, features):
+        """محاسبه روند بازار"""
+        try:
+            # استفاده از ترکیبی از شاخص‌های روند
+            trend_score = 0
+            factors = 0
+            
+            # EMAs
+            if 'ema20' in features.columns and 'ema50' in features.columns and 'close' in features.columns:
+                price = features['close'].iloc[0]
+                ema20 = features['ema20'].iloc[0]
+                ema50 = features['ema50'].iloc[0]
+                
+                # قیمت بالاتر از EMA20 مثبت است
+                if price > ema20:
+                    trend_score += 1
+                else:
+                    trend_score -= 1
+                factors += 1
+                
+                # EMA20 بالاتر از EMA50 مثبت است
+                if ema20 > ema50:
+                    trend_score += 1
+                else:
+                    trend_score -= 1
+                factors += 1
+                
+            # MACD
+            if 'macd' in features.columns and 'macd_signal' in features.columns:
+                macd = features['macd'].iloc[0]
+                macd_signal = features['macd_signal'].iloc[0]
+                
+                # MACD بالاتر از خط سیگنال مثبت است
+                if macd > macd_signal:
+                    trend_score += 1
+                else:
+                    trend_score -= 1
+                factors += 1
+                
+                # MACD مثبت نشان‌دهنده روند صعودی است
+                if macd > 0:
+                    trend_score += 1
+                else:
+                    trend_score -= 1
+                factors += 1
+                
+            # RSI
+            if 'rsi14' in features.columns:
+                rsi = features['rsi14'].iloc[0]
+                
+                # RSI بالای 50 نشان‌دهنده روند صعودی است
+                if rsi > 50:
+                    trend_score += 1
+                else:
+                    trend_score -= 1
+                factors += 1
+                
+            # ADX (قدرت روند)
+            if 'adx14' in features.columns:
+                adx = features['adx14'].iloc[0]
+                
+                # ADX بالای 25 نشان‌دهنده روند قوی است
+                if adx > 25:
+                    factors += 1  # فقط به عامل اضافه می‌کنیم، روند را تعیین نمی‌کند
+                    
+            # فیچر روند ترکیبی متا
+            if 'trend_meta_signal' in features.columns:
+                meta_trend = features['trend_meta_signal'].iloc[0]
+                trend_score += meta_trend * 2  # وزن بیشتر
+                factors += 2
+                
+            # استفاده از میانگین نرمال‌شده
+            if factors > 0:
+                normalized_trend = trend_score / factors
+                # مقیاس‌بندی به بازه -1 تا 1
+                return max(-1, min(1, normalized_trend))
+            else:
+                return 0  # خنثی
+                
+        except Exception as e:
+            logger.error(f"Error calculating market trend: {e}")
+            return 0  # روند خنثی در صورت خطا
+                    
     def _execute_partial_tp(self, symbol, position, price, tp_index):
         """اجرای TP جزئی"""
         tp_size = position['size'] * position['tp_volumes'][tp_index]
@@ -451,4 +573,204 @@ class TradingOrchestrator:
                 print(f"\nCurrent price: {current_price:.2f}")
                 
                 # مدیریت اجرای سیگنال
-                if adjusted_decision != 1 and confidence > 
+                if adjusted_decision != 1 and confidence > self.confidence_threshold:
+                    # محاسبه اندازه پوزیشن
+                    position_size = self._calculate_position_size(symbol, current_price, adjusted_decision)
+                    
+                    # اگر اندازه پوزیشن معنادار باشد
+                    if position_size > 0:
+                        # محاسبه سطوح TP/SL
+                        tp_levels, tp_volumes, sl_level = self._calculate_tp_sl_levels(
+                            symbol, current_price, adjusted_decision, market_volatility
+                        )
+                        
+                        # باز کردن پوزیشن
+                        if adjusted_decision == 2:  # BUY
+                            self._open_buy_position(symbol, current_price, position_size, tp_levels, tp_volumes, sl_level)
+                        elif adjusted_decision == 0:  # SELL
+                            self._open_sell_position(symbol, current_price, position_size, tp_levels, tp_volumes, sl_level)
+                    else:
+                        logger.info(f"Calculated position size for {symbol} is too small, skipping trade")
+                        print(f"{Colors.YELLOW}Calculated position size is too small, skipping trade{Colors.RESET}")
+                else:
+                    if adjusted_decision == 1:
+                        logger.info(f"HOLD signal for {symbol}, no action needed")
+                        print(f"{Colors.YELLOW}HOLD signal, no trade will be executed{Colors.RESET}")
+                    else:
+                        logger.info(f"Signal confidence ({confidence:.1f}%) below threshold ({self.confidence_threshold}%) for {symbol}")
+                        print(f"{Colors.YELLOW}Signal confidence below threshold, no trade will be executed{Colors.RESET}")
+                
+            except Exception as e:
+                logger.error(f"Error in meta model prediction: {e}", exc_info=True)
+                print(f"{Colors.RED}Error in meta model prediction: {e}{Colors.RESET}")
+    
+    def _calculate_position_size(self, symbol, price, decision):
+        """محاسبه اندازه موقعیت"""
+        # استفاده از مدیریت ریسک برای محاسبه اندازه موقعیت
+        balance = self.demo_account.get_balance()
+        
+        # محاسبه درصد ریسک بر اساس نوع تصمیم و روش مدیریت ریسک
+        risk_percent = self.risk_manager.get_position_risk(symbol, decision)
+        
+        # محاسبه مقدار در معرض ریسک
+        risk_amount = balance * risk_percent
+        
+        # محاسبه اندازه موقعیت (با در نظر گرفتن استاپ لاس اولیه)
+        sl_percent = 0.01  # 1% استاپ لاس پیش‌فرض
+        
+        # محاسبه ارزش موقعیت
+        position_value = risk_amount / sl_percent
+        
+        # محاسبه اندازه موقعیت بر اساس قیمت
+        position_size = position_value / price
+        
+        # محدودیت حداقل اندازه موقعیت
+        min_size = 0.001  # حداقل اندازه موقعیت
+        if position_size < min_size:
+            position_size = 0
+        
+        # گرد کردن به دقت مناسب
+        if symbol.startswith('BTC'):
+            position_size = round(position_size, 6)
+        else:
+            position_size = round(position_size, 4)
+            
+        return position_size
+    
+    def _calculate_tp_sl_levels(self, symbol, price, decision, volatility):
+        """محاسبه سطوح TP و SL"""
+        # تنظیم مقادیر پیش‌فرض
+        if decision == 2:  # BUY
+            sl_percent = 0.01  # 1% از قیمت فعلی
+            tp_percents = [0.01, 0.02, 0.03, 0.05]  # 1%, 2%, 3%, 5%
+        else:  # SELL
+            sl_percent = 0.01  # 1% از قیمت فعلی
+            tp_percents = [0.01, 0.02, 0.03, 0.05]  # 1%, 2%, 3%, 5%
+            
+        # تنظیم بر اساس نوسان بازار
+        volatility_factor = max(1, min(3, volatility * 100))  # محدود به بازه 1-3
+        sl_percent = sl_percent * volatility_factor
+        tp_percents = [tp * volatility_factor for tp in tp_percents]
+        
+        # اطمینان از اینکه TP1 بیشتر از SL باشد
+        if tp_percents[0] <= sl_percent:
+            tp_percents[0] = sl_percent * 1.5
+        
+        # محاسبه سطوح قیمت
+        if decision == 2:  # BUY
+            sl_level = price * (1 - sl_percent)
+            tp_levels = [price * (1 + tp_percent) for tp_percent in tp_percents]
+        else:  # SELL
+            sl_level = price * (1 + sl_percent)
+            tp_levels = [price * (1 - tp_percent) for tp_percent in tp_percents]
+        
+        # تخصیص حجم برای هر سطح TP
+        tp_volumes = self.tp_volumes.copy()
+        
+        return tp_levels, tp_volumes, sl_level
+    
+    def _open_buy_position(self, symbol, price, size, tp_levels, tp_volumes, sl_level):
+        """باز کردن موقعیت خرید"""
+        try:
+            # محاسبه کارمزد
+            commission = self._calculate_commission(price, size)
+            
+            # کسر هزینه و کارمزد از حساب دمو
+            total_cost = price * size + commission
+            if not self.demo_account.withdraw(total_cost):
+                logger.warning(f"Insufficient balance to open BUY position for {symbol}")
+                print(f"{Colors.YELLOW}Insufficient balance to open position{Colors.RESET}")
+                return False
+                
+            # ایجاد موقعیت در مدیریت پوزیشن
+            position_id = self.position_manager.open_position(
+                symbol=symbol,
+                position_type='buy',
+                entry_price=price,
+                size=size,
+                tp_levels=tp_levels,
+                tp_volumes=tp_volumes,
+                stop_loss=sl_level
+            )
+            
+            if position_id:
+                logger.info(f"Opened BUY position for {symbol} at {price}, size: {size}, SL: {sl_level:.2f}, TPs: {[f'{tp:.2f}' for tp in tp_levels]}")
+                print(f"\n{Colors.GREEN}>>> OPENED BUY POSITION <<<{Colors.RESET}")
+                print(f"Symbol: {symbol}")
+                print(f"Entry price: {price:.2f}")
+                print(f"Position size: {size}")
+                print(f"Stop Loss: {sl_level:.2f} ({((sl_level/price)-1)*100:.2f}%)")
+                print(f"Take Profit levels:")
+                
+                for i, (tp, vol) in enumerate(zip(tp_levels, tp_volumes)):
+                    print(f"  TP{i+1}: {tp:.2f} ({((tp/price)-1)*100:.2f}%) - {vol*100:.1f}% of position")
+                    
+                print(f"Commission: {commission:.4f} USDT")
+                print(f"Total cost: {total_cost:.4f} USDT")
+                
+                # نمایش وضعیت حساب دمو
+                self.demo_account.print_status()
+                
+                return True
+            else:
+                # برگرداندن پول به حساب در صورت خطا در ایجاد موقعیت
+                self.demo_account.deposit(total_cost)
+                logger.error(f"Failed to open BUY position for {symbol}")
+                print(f"{Colors.RED}Failed to open position{Colors.RESET}")
+                return False
+        except Exception as e:
+            logger.error(f"Error opening BUY position for {symbol}: {e}", exc_info=True)
+            print(f"{Colors.RED}Error opening position: {e}{Colors.RESET}")
+            return False
+    
+    def _open_sell_position(self, symbol, price, size, tp_levels, tp_volumes, sl_level):
+        """باز کردن موقعیت فروش"""
+        try:
+            # محاسبه کارمزد
+            commission = self._calculate_commission(price, size)
+            
+            # کسر کارمزد از حساب دمو
+            if not self.demo_account.withdraw(commission):
+                logger.warning(f"Insufficient balance to open SELL position for {symbol}")
+                print(f"{Colors.YELLOW}Insufficient balance to open position{Colors.RESET}")
+                return False
+                
+            # ایجاد موقعیت در مدیریت پوزیشن
+            position_id = self.position_manager.open_position(
+                symbol=symbol,
+                position_type='sell',
+                entry_price=price,
+                size=size,
+                tp_levels=tp_levels,
+                tp_volumes=tp_volumes,
+                stop_loss=sl_level
+            )
+            
+            if position_id:
+                logger.info(f"Opened SELL position for {symbol} at {price}, size: {size}, SL: {sl_level:.2f}, TPs: {[f'{tp:.2f}' for tp in tp_levels]}")
+                print(f"\n{Colors.RED}>>> OPENED SELL POSITION <<<{Colors.RESET}")
+                print(f"Symbol: {symbol}")
+                print(f"Entry price: {price:.2f}")
+                print(f"Position size: {size}")
+                print(f"Stop Loss: {sl_level:.2f} ({((sl_level/price)-1)*100:.2f}%)")
+                print(f"Take Profit levels:")
+                
+                for i, (tp, vol) in enumerate(zip(tp_levels, tp_volumes)):
+                    print(f"  TP{i+1}: {tp:.2f} ({((tp/price)-1)*100:.2f}%) - {vol*100:.1f}% of position")
+                    
+                print(f"Commission: {commission:.4f} USDT")
+                
+                # نمایش وضعیت حساب دمو
+                self.demo_account.print_status()
+                
+                return True
+            else:
+                # برگرداندن کارمزد به حساب در صورت خطا در ایجاد موقعیت
+                self.demo_account.deposit(commission)
+                logger.error(f"Failed to open SELL position for {symbol}")
+                print(f"{Colors.RED}Failed to open position{Colors.RESET}")
+                return False
+        except Exception as e:
+            logger.error(f"Error opening SELL position for {symbol}: {e}", exc_info=True)
+            print(f"{Colors.RED}Error opening position: {e}{Colors.RESET}")
+            return False
