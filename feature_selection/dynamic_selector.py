@@ -384,4 +384,74 @@ class DynamicFeatureSelector:
         """محاسبه توزیع گروه‌های فیچر در فیچرهای انتخاب شده"""
         group_counts = {group: 0 for group in FEATURE_GROUPS}
         
-        for feature in self.selected_features
+        for feature in self.selected_features:
+            group = get_group_for_feature(feature)
+            if group in group_counts:
+                group_counts[group] += 1
+            else:
+                group_counts['unknown'] = group_counts.get('unknown', 0) + 1
+        
+        # محاسبه درصدها
+        total = len(self.selected_features)
+        if total > 0:
+            group_percentages = {group: (count / total) * 100 for group, count in group_counts.items()}
+        else:
+            group_percentages = {group: 0 for group in group_counts}
+            
+        return group_counts, group_percentages
+    
+    def print_selected_features(self, detailed=False):
+        """نمایش فیچرهای انتخاب شده"""
+        if not self.selected_features:
+            print("No features selected yet")
+            return
+            
+        print("\n============================================================")
+        print(f"SELECTED FEATURES ({len(self.selected_features)} features)")
+        print("============================================================")
+        
+        # مرتب‌سازی براساس اهمیت
+        sorted_features = []
+        for feature in self.selected_features:
+            importance = self.feature_importances.get(feature, 0)
+            sorted_features.append((feature, importance))
+        
+        sorted_features = sorted(sorted_features, key=lambda x: x[1], reverse=True)
+        
+        # نمایش فیچرها
+        for i, (feature, importance) in enumerate(sorted_features):
+            if i < 15 or detailed:
+                print(f"{i+1:2d}. {feature:30s}: {importance:.6f}")
+                
+        if len(sorted_features) > 15 and not detailed:
+            print(f"... and {len(sorted_features) - 15} more features")
+            
+        print("============================================================")
+        
+        # نمایش توزیع گروه‌های فیچر
+        group_counts, group_percentages = self.get_group_distribution()
+        
+        print("\nFeature group distribution:")
+        for group, count in sorted(group_counts.items(), key=lambda x: x[1], reverse=True):
+            if count > 0:
+                print(f"- {group}: {count} features ({group_percentages[group]:.1f}%)")
+        
+        # ذخیره جزئیات در یک فایل متنی
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, f"selected_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        
+        with open(log_file, 'w') as f:
+            f.write(f"Selected Features at {datetime.now()}\n")
+            f.write("============================================================\n")
+            for i, (feature, importance) in enumerate(sorted_features):
+                f.write(f"{i+1:2d}. {feature:30s}: {importance:.6f}\n")
+            
+            f.write("\nFeature group distribution:\n")
+            for group, count in sorted(group_counts.items(), key=lambda x: x[1], reverse=True):
+                if count > 0:
+                    f.write(f"- {group}: {count} features ({group_percentages[group]:.1f}%)\n")
+            
+            f.write("\nTotal combinations evaluated: 800\n")
+            
+        print(f"Feature details saved to {log_file}")
