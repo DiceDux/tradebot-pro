@@ -29,3 +29,34 @@ mysql-connector-python
 #python smart_trader_cli.py --live
 #python smart_trader_cli.py --prepare_data
 #python feature_monitor.py BTCUSDT 5
+
+#آزمایش سیستم:
+ا#جرای محاسبه فیچر: python smart_trader_enhanced.py --feature-calc
+#اجرای مانیتور فیچر: python smart_trader_enhanced.py --monitor
+#اجرای سیستم معاملاتی: python smart_trader_enhanced.py --trading
+
+#کارهای باقی‌مانده برای تکمیل پیاده‌سازی
+#آماده‌سازی دیتابیس برای ذخیره فیچرها:
+
+#اجرای python smart_trader_enhanced.py --feature-calc برای ایجاد جداول مورد نیاز
+#آموزش مدل‌های متخصص:
+
+#اجرای python smart_trader_enhanced.py --train --symbol BTCUSDT
+ا#ین کار باید برای هر نماد که می‌خواهید معامله کنید انجام شود
+
+
+#راه‌اندازی محاسبه فیچر زنده:
+#bash
+#python smart_trader_enhanced.py --feature-calc
+#مشاهده فیچرها در زمان واقعی:
+#bash
+#python smart_trader_enhanced.py --monitor --symbol BTCUSDT --interval 5
+#اجرای سیستم معاملاتی:
+#bash
+#python smart_trader_enhanced.py --trading
+#آموزش مدل‌ها:
+#bash
+#python smart_trader_enhanced.py --train --symbol BTCUSDT
+#اجرای همه اجزا با هم:
+#bash
+#python smart_trader_enhanced.py
