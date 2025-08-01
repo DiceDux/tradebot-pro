@@ -1,145 +1,187 @@
 """
-کلاس تنظیم آستانه‌های تطبیقی برای تصمیم‌گیری معاملاتی
-این کلاس آستانه‌های تصمیم‌گیری را بر اساس شرایط بازار تنظیم می‌کند
+کلاس آستانه‌های تطبیقی برای تصمیم‌گیری معاملاتی
 """
 import numpy as np
-from datetime import datetime, timedelta
 import pandas as pd
-import json
-import os
+from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger("adaptive_thresholds")
 
 class AdaptiveThresholds:
-    """کلاس تنظیم آستانه‌های تطبیقی برای تصمیم‌گیری معاملاتی"""
+    """کلاس آستانه‌های تطبیقی برای تصمیم‌گیری معاملاتی"""
     
     def __init__(self):
-        self.base_threshold = 0.4  # آستانه پایه برای اطمینان
-        self.market_conditions = {}  # شرایط بازار برای هر نماد
-        self.history = {}  # تاریخچه تصمیمات و اطمینان برای هر نماد
-        self.history_file = "model/threshold_history.json"
-        self.max_history_size = 100  # تعداد تصمیمات گذشته برای ذخیره
+        # آستانه‌های پایه برای هر کلاس
+        self.base_thresholds = {
+            0: 0.40,  # آستانه برای فروش
+            1: 0.45,  # آستانه برای هولد (بالاتر برای کاهش سیگنال‌های هولد)
+            2: 0.40   # آستانه برای خرید
+        }
         
-        # بارگیری تاریخچه اگر وجود دارد
-        self._load_history()
+        # آستانه‌های فعلی برای هر نماد
+        self.current_thresholds = {}
         
-    def apply(self, symbol, prediction, probabilities):
+        # شرایط بازار برای هر نماد
+        self.market_conditions = {}
+        
+        # تاریخچه سیگنال‌ها
+        self.signal_history = []
+        
+        # ضرایب تنظیم برای شرایط بازار
+        self.volatility_factor = 0.2    # تأثیر نوسان بر آستانه‌ها
+        self.trend_factor = 0.15        # تأثیر روند بر آستانه‌ها
+        
+    def update_market_condition(self, symbol, volatility, trend):
         """
-        اعمال آستانه‌های تطبیقی بر اساس شرایط بازار و اطمینان مدل
+        به‌روزرسانی شرایط بازار برای یک نماد
         
         Args:
             symbol: نماد معاملاتی
-            prediction: پیش‌بینی اولیه (0: فروش، 1: نگهداری، 2: خرید)
-            probabilities: احتمالات هر کلاس [p_sell, p_hold, p_buy]
+            volatility: میزان نوسان بازار (0 تا 1)
+            trend: قدرت روند (-1 تا 1، منفی=نزولی، مثبت=صعودی)
+        """
+        if symbol not in self.market_conditions:
+            self.market_conditions[symbol] = {
+                'volatility': 0.0,
+                'trend': 0.0,
+                'last_update': datetime.now()
+            }
+            
+        # به‌روزرسانی با میانگین متحرک وزن‌دار
+        alpha = 0.7  # وزن داده جدید
+        
+        prev_volatility = self.market_conditions[symbol]['volatility']
+        prev_trend = self.market_conditions[symbol]['trend']
+        
+        self.market_conditions[symbol]['volatility'] = alpha * volatility + (1 - alpha) * prev_volatility
+        self.market_conditions[symbol]['trend'] = alpha * trend + (1 - alpha) * prev_trend
+        self.market_conditions[symbol]['last_update'] = datetime.now()
+        
+        # به‌روزرسانی آستانه‌ها
+        self._update_thresholds(symbol)
+        
+    def _update_thresholds(self, symbol):
+        """
+        به‌روزرسانی آستانه‌های تصمیم‌گیری برای یک نماد
+        
+        Args:
+            symbol: نماد معاملاتی
+        """
+        if symbol not in self.current_thresholds:
+            self.current_thresholds[symbol] = self.base_thresholds.copy()
+            
+        volatility = self.market_conditions[symbol]['volatility']
+        trend = self.market_conditions[symbol]['trend']
+        
+        # افزایش آستانه در نوسان بالا (کاهش ریسک)
+        volatility_adjustment = volatility * self.volatility_factor
+        
+        # تنظیم آستانه بر اساس روند (کاهش آستانه خرید در روند صعودی و بالعکس)
+        buy_trend_adj = -trend * self.trend_factor
+        sell_trend_adj = trend * self.trend_factor
+        
+        # اعمال تنظیمات به آستانه‌های پایه
+        thresholds = self.current_thresholds[symbol]
+        
+        # بروزرسانی آستانه‌ها با توجه به شرایط بازار
+        thresholds[0] = self.base_thresholds[0] + volatility_adjustment + sell_trend_adj  # آستانه فروش
+        thresholds[1] = self.base_thresholds[1] + volatility_adjustment                  # آستانه هولد
+        thresholds[2] = self.base_thresholds[2] + volatility_adjustment + buy_trend_adj   # آستانه خرید
+        
+        # محدودسازی آستانه‌ها به بازه منطقی
+        for key in thresholds:
+            thresholds[key] = max(0.3, min(0.7, thresholds[key]))
+            
+        logger.debug(f"Updated thresholds for {symbol}: sell={thresholds[0]:.2f}, hold={thresholds[1]:.2f}, buy={thresholds[2]:.2f}")
+        
+    def apply(self, symbol, prediction, probabilities):
+        """
+        اعمال آستانه‌های تطبیقی به پیش‌بینی مدل
+        
+        Args:
+            symbol: نماد معاملاتی
+            prediction: پیش‌بینی اولیه (0=فروش، 1=هولد، 2=خرید)
+            probabilities: احتمالات کلاس‌ها
             
         Returns:
-            (final_decision, confidence): تصمیم نهایی و درصد اطمینان
+            (adjusted_decision, confidence): تصمیم تعدیل‌شده و میزان اطمینان
         """
-        # محاسبه اطمینان از پیش‌بینی فعلی
-        confidence = probabilities[prediction] * 100
+        # بررسی وجود آستانه‌های تنظیم‌شده
+        if symbol not in self.current_thresholds:
+            self.current_thresholds[symbol] = self.base_thresholds.copy()
+            
+        thresholds = self.current_thresholds[symbol]
         
-        # آستانه اطمینان پویا بر اساس وضعیت بازار
-        threshold = self._get_threshold_for_symbol(symbol)
+        # کاهش احتمال سیگنال هولد (افزایش خرید/فروش)
+        adjusted_probs = probabilities.copy()
+        hold_reduction = 0.1
+        hold_diff = adjusted_probs[1] * hold_reduction
+        adjusted_probs[1] -= hold_diff
         
-        # بررسی پراکندگی احتمالات
-        prob_spread = max(probabilities) - min(probabilities)
+        # توزیع مجدد اختلاف بین خرید و فروش
+        if trend > 0:  # روند صعودی
+            adjusted_probs[2] += hold_diff * 0.7  # 70% به خرید
+            adjusted_probs[0] += hold_diff * 0.3  # 30% به فروش
+        else:  # روند نزولی یا خنثی
+            adjusted_probs[0] += hold_diff * 0.7  # 70% به فروش
+            adjusted_probs[2] += hold_diff * 0.3  # 30% به خرید
+            
+        # نرمال‌سازی مجدد
+        adjusted_probs = adjusted_probs / np.sum(adjusted_probs)
         
-        # اگر احتمالات خیلی به هم نزدیک هستند، تبدیل به نگهداری می‌شود
-        if prob_spread < 0.15:  # اختلاف کمتر از 15%
-            adjusted_decision = 1  # تبدیل به نگهداری
-            logger.info(f"Probabilities too close ({prob_spread:.2f}), adjusted decision to HOLD")
-        # اگر اطمینان کمتر از آستانه است، به نگهداری تبدیل می‌شود
-        elif confidence < threshold and prediction != 1:  # اگر پیش‌بینی نگهداری نیست
-            adjusted_decision = 1  # تبدیل به نگهداری
-            logger.info(f"Low confidence ({confidence:.1f}% < {threshold:.1f}%), adjusted decision to HOLD")
+        # بررسی آستانه‌ها
+        decision = None
+        confidence = 0.0
+        
+        # اولویت با سیگنال‌های خرید و فروش (با آستانه کمتر)
+        if adjusted_probs[2] >= thresholds[2] and adjusted_probs[2] > adjusted_probs[0]:
+            decision = 2  # خرید
+            confidence = adjusted_probs[2] * 100
+        elif adjusted_probs[0] >= thresholds[0] and adjusted_probs[0] > adjusted_probs[2]:
+            decision = 0  # فروش
+            confidence = adjusted_probs[0] * 100
         else:
-            adjusted_decision = prediction
-            
-        # ثبت تصمیم در تاریخچه
-        self._update_history(symbol, adjusted_decision, confidence, probabilities)
+            # اگر هیچ‌کدام از شرایط بالا برقرار نبود، هولد
+            decision = 1  # هولد
+            confidence = adjusted_probs[1] * 100
         
-        return adjusted_decision, confidence
-        
-    def _get_threshold_for_symbol(self, symbol):
-        """
-        دریافت آستانه مناسب بر اساس شرایط نماد و تاریخچه
-        """
-        # آستانه پایه
-        threshold = self.base_threshold * 100  # تبدیل به درصد
-        
-        # تنظیم بر اساس نوسانات بازار (اگر موجود باشد)
-        if symbol in self.market_conditions and 'volatility' in self.market_conditions[symbol]:
-            volatility = self.market_conditions[symbol]['volatility']
-            # در بازارهای با نوسان بالا، آستانه اطمینان را افزایش می‌دهیم
-            threshold += volatility * 10
-        
-        # تنظیم بر اساس تاریخچه تصمیمات
-        if symbol in self.history and len(self.history[symbol]) > 10:
-            recent_history = self.history[symbol][-10:]
-            # میانگین اطمینان تصمیمات اخیر
-            avg_confidence = np.mean([item['confidence'] for item in recent_history])
-            
-            # اگر میانگین اطمینان بالا بوده، آستانه را کاهش می‌دهیم
-            if avg_confidence > 70:
-                threshold *= 0.9  # کاهش 10%
-            # اگر میانگین اطمینان پایین بوده، آستانه را افزایش می‌دهیم
-            elif avg_confidence < 50:
-                threshold *= 1.1  # افزایش 10%
-        
-        return min(80, max(35, threshold))  # محدود کردن بین 35% تا 80%
-        
-    def update_market_condition(self, symbol, volatility, trend, volume=None):
-        """
-        به‌روزرسانی شرایط بازار برای یک نماد
-        """
-        self.market_conditions[symbol] = {
-            'volatility': volatility,
-            'trend': trend,
-            'volume': volume,
-            'updated_at': datetime.now().isoformat()
-        }
-        
-    def get_market_condition(self, symbol):
-        """دریافت شرایط بازار برای یک نماد"""
-        return self.market_conditions.get(symbol, {})
-        
-    def _update_history(self, symbol, decision, confidence, probabilities):
-        """ثبت تصمیم در تاریخچه"""
-        if symbol not in self.history:
-            self.history[symbol] = []
-            
-        # اضافه کردن تصمیم جدید
-        self.history[symbol].append({
-            'timestamp': datetime.now().isoformat(),
-            'decision': int(decision),
-            'confidence': float(confidence),
-            'probabilities': [float(p) for p in probabilities]
+        # ثبت در تاریخچه
+        self.signal_history.append({
+            'symbol': symbol,
+            'timestamp': datetime.now(),
+            'original_prediction': prediction,
+            'adjusted_decision': decision,
+            'original_probs': probabilities,
+            'adjusted_probs': adjusted_probs,
+            'confidence': confidence,
+            'thresholds': thresholds.copy()
         })
         
-        # محدود کردن تعداد تصمیمات ذخیره شده
-        if len(self.history[symbol]) > self.max_history_size:
-            self.history[symbol] = self.history[symbol][-self.max_history_size:]
+        # محدود کردن تاریخچه به 100 آیتم آخر
+        if len(self.signal_history) > 100:
+            self.signal_history.pop(0)
             
-        # ذخیره تاریخچه
-        self._save_history()
+        return decision, confidence
         
-    def _save_history(self):
-        """ذخیره تاریخچه تصمیمات در فایل"""
-        try:
-            # ساخت دایرکتوری اگر وجود ندارد
-            os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+    def get_current_thresholds(self, symbol):
+        """دریافت آستانه‌های فعلی برای یک نماد"""
+        if symbol in self.current_thresholds:
+            return self.current_thresholds[symbol]
+        else:
+            return self.base_thresholds
             
-            with open(self.history_file, 'w') as f:
-                json.dump(self.history, f)
-        except Exception as e:
-            logger.error(f"Error saving threshold history: {e}")
-    
-    def _load_history(self):
-        """بارگیری تاریخچه تصمیمات از فایل"""
-        try:
-            if os.path.exists(self.history_file):
-                with open(self.history_file, 'r') as f:
-                    self.history = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading threshold history: {e}")
+    def get_market_condition(self, symbol):
+        """دریافت شرایط بازار برای یک نماد"""
+        if symbol in self.market_conditions:
+            return self.market_conditions[symbol]
+        else:
+            return {
+                'volatility': 0.0,
+                'trend': 0.0,
+                'last_update': datetime.now()
+            }
+            
+    def get_signal_history(self, limit=10):
+        """دریافت تاریخچه سیگنال‌ها"""
+        return self.signal_history[-limit:]
