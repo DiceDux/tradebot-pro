@@ -60,7 +60,7 @@ def get_historical_news(symbol, limit=1000):
         host='localhost',
         user='root',
         password='',
-        database='database'
+        database='tradebot-pro'
     )
     
     # استخراج سیمبل پایه (مثلاً BTC از BTCUSDT)
