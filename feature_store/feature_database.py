@@ -38,7 +38,7 @@ class FeatureDatabase:
                     'host': 'localhost',
                     'user': 'root',
                     'password': '',
-                    'database': 'database'
+                    'database': 'tradebot-pro'
                 }
                 # ساخت دایرکتوری config اگر وجود ندارد
                 os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
@@ -53,7 +53,7 @@ class FeatureDatabase:
                 'host': 'localhost',
                 'user': 'root',
                 'password': '',
-                'database': 'database'
+                'database': 'tradebot-pro'
             }
         
     def _connect(self):
