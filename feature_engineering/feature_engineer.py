@@ -182,21 +182,21 @@ def build_features(candles_df, news_df, symbol):
                 
                 try:
                     # اگر نوع داده timestamp یا datetime64 است
-                    if pd.api.types.is_datetime64_dtype(news_df['published_at']):
+                    if pd.api.types.is_datetime64_dtype(news_df['published_at']) or isinstance(sample, pd.Timestamp):
                         # تبدیل صحیح به int64 و سپس به timestamp
                         news_df['ts'] = news_df['published_at'].astype('int64') // 10**9
                         logger.info("Converted datetime64 values to Unix timestamps")
                         print("Converted datetime64 values to Unix timestamps")
                     
                     # اگر نوع داده رشته است
-                    elif pd.api.types.is_string_dtype(news_df['published_at']):
+                    elif isinstance(sample, str):
                         # تبدیل رشته به datetime64 و سپس به timestamp
                         news_df['ts'] = pd.to_datetime(news_df['published_at']).astype('int64') // 10**9
                         logger.info("Converted string date values to Unix timestamps")
                         print("Converted string date values to Unix timestamps")
                     
                     # اگر عدد صحیح است
-                    elif pd.api.types.is_integer_dtype(news_df['published_at']):
+                    elif isinstance(sample, (int, np.integer)):
                         # اگر قبلاً timestamp است، مستقیماً استفاده می‌کنیم
                         news_df['ts'] = news_df['published_at']
                         logger.info("Using existing integer timestamps")
@@ -208,61 +208,64 @@ def build_features(candles_df, news_df, symbol):
                         logger.info("Successfully converted to timestamps with generic method")
                         print("Successfully converted to timestamps with generic method")
                     
-                    # گزارش نتایج تبدیل
-                    if len(news_df) > 0:
-                        now_ts = int(time.time())
-                        oldest_ts = news_df['ts'].min()
-                        newest_ts = news_df['ts'].max()
-                        
-                        # محاسبه فاصله زمانی بر حسب ساعت
-                        oldest_hours = (now_ts - oldest_ts) / 3600
-                        newest_hours = (now_ts - newest_ts) / 3600
-                        
-                        logger.info(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
-                        print(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
-                        
-                        # آمار توزیع اخبار در بازه‌های زمانی
-                        h1 = len(news_df[news_df['ts'] >= now_ts - 3600])
-                        h6 = len(news_df[news_df['ts'] >= now_ts - 21600])
-                        h24 = len(news_df[news_df['ts'] >= now_ts - 86400])
-                        h72 = len(news_df[news_df['ts'] >= now_ts - 259200])
-                        
-                        logger.info(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
-                        print(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
-                    
                 except Exception as e:
-                    logger.error(f"Error in timestamp conversion: {e}")
-                    print(f"Error in timestamp conversion: {e}")
-                    # روش جایگزین با استفاده از strptime
-                    logger.info("Using direct string parsing with strptime")
-                    print("Using direct string parsing with strptime")
-                    ts_values = []
+                    logger.error(f"Error converting published_at to timestamps: {e}")
+                    print(f"Error converting published_at to timestamps: {e}")
                     
+                    # روش جایگزین: تبدیل دستی هر مقدار به timestamp
+                    ts_values = []
                     for val in news_df['published_at']:
                         try:
-                            # تبدیل با فرمت MySQL timestamp
-                            if isinstance(val, str):
-                                dt = datetime.strptime(val, '%Y-%m-%d %H:%M:%S')
-                                ts_values.append(int(dt.timestamp()))
-                            elif isinstance(val, pd.Timestamp):
-                                # اگر Timestamp پانداس است
-                                ts_values.append(int(val.timestamp()))
-                            elif isinstance(val, (int, float)):
-                                # اگر عدد است
+                            if isinstance(val, pd.Timestamp) or isinstance(val, np.datetime64):
+                                ts_values.append(int(pd.Timestamp(val).timestamp()))
+                            elif isinstance(val, str):
+                                ts_values.append(int(pd.to_datetime(val).timestamp()))
+                            elif isinstance(val, (int, float, np.integer, np.floating)):
                                 ts_values.append(int(val))
                             else:
-                                # در صورت نوع نامشخص
                                 ts_values.append(int(time.time()))
-                        except Exception:
-                            # در صورت خطا، از زمان فعلی استفاده می‌کنیم
+                        except:
                             ts_values.append(int(time.time()))
                     
                     news_df['ts'] = ts_values
+                    logger.info("Used manual conversion for timestamps")
+                    print("Used manual conversion for timestamps")
             else:
                 logger.warning(f"No 'published_at' column found in news data for {symbol}")
-                print(f"Warning: No 'published_at' column found in news data for {symbol}")
-                # ایجاد ستون ts با مقادیر پیش‌فرض
-                news_df['ts'] = int(time.time())
+                news_df['ts'] = int(time.time())  # استفاده از زمان فعلی
+        
+        # اطمینان از اینکه ستون ts عدد صحیح است
+        if 'ts' in news_df.columns:
+            # اگر هنوز datetime64 است، به timestamp تبدیل کنیم
+            if pd.api.types.is_datetime64_dtype(news_df['ts']):
+                news_df['ts'] = news_df['ts'].astype('int64') // 10**9
+                logger.info("Converted ts column from datetime64 to int64")
+                print("Converted ts column from datetime64 to int64")
+            
+            # گزارش بازه زمانی اخبار
+            try:
+                now_ts = int(time.time())
+                oldest_ts = news_df['ts'].min()
+                newest_ts = news_df['ts'].max()
+                
+                # محاسبه فاصله زمانی بر حسب ساعت
+                oldest_hours = (now_ts - oldest_ts) / 3600
+                newest_hours = (now_ts - newest_ts) / 3600
+                
+                logger.info(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
+                print(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
+                
+                # آمار توزیع اخبار در بازه‌های زمانی - اکنون با اطمینان از اینکه همه عدد صحیح هستند
+                h1 = len(news_df[news_df['ts'] >= now_ts - 3600])
+                h6 = len(news_df[news_df['ts'] >= now_ts - 21600])
+                h24 = len(news_df[news_df['ts'] >= now_ts - 86400])
+                h72 = len(news_df[news_df['ts'] >= now_ts - 259200])
+                
+                logger.info(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
+                print(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
+            except Exception as e:
+                logger.error(f"Error reporting news timespan: {e}")
+                print(f"Error reporting news timespan: {e}")
         
         # اطمینان از وجود sentiment_score
         if 'sentiment_score' not in news_df.columns:
@@ -858,7 +861,8 @@ def build_features(candles_df, news_df, symbol):
 
     # =========== فیچرهای خبری و فاندامنتال ===========
     try:
-        now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(time.time())
+        # تبدیل به int برای اطمینان از سازگاری نوع داده
+        now_ts = int(time.time())
     except:
         now_ts = int(time.time())
         
@@ -873,7 +877,18 @@ def build_features(candles_df, news_df, symbol):
     result = {}
 
     # اطمینان از اینکه news_df شامل اطلاعات و ستون‌های مورد نیاز است
-    if news_df is not None and not news_df.empty:
+    if news_df is not None and not news_df.empty and 'ts' in news_df.columns:
+        # اطمینان از اینکه ستون ts عدد صحیح است
+        if not pd.api.types.is_integer_dtype(news_df['ts']):
+            try:
+                if pd.api.types.is_datetime64_dtype(news_df['ts']):
+                    news_df['ts'] = news_df['ts'].astype('int64') // 10**9
+                else:
+                    news_df['ts'] = news_df['ts'].astype(int)
+            except:
+                # اگر تبدیل امکان‌پذیر نیست، از زمان فعلی استفاده کنید
+                news_df['ts'] = int(time.time())
+        
         # تبدیل sentiment_score به float
         if 'sentiment_score' in news_df.columns:
             news_df['sentiment_score'] = pd.to_numeric(news_df['sentiment_score'], errors='coerce').fillna(0.0)
@@ -893,12 +908,13 @@ def build_features(candles_df, news_df, symbol):
 
             # اضافه کردن فیچرهای مبتنی بر بازه زمانی
             for rng, seconds in ranges.items():
-                # انتخاب ستون زمان مناسب
-                ts_column = 'ts' if 'ts' in news_df.columns else 'published_at'
+                # اطمینان از اینکه هر دو طرف مقایسه int هستند
+                now_ts_int = int(now_ts)
+                threshold = now_ts_int - int(seconds)
                 
-                if ts_column in news_df.columns:
-                    # فیلتر کردن اخبار اخیر برای این بازه زمانی
-                    recent = news_df[news_df[ts_column] >= now_ts - seconds]
+                # فیلتر کردن اخبار اخیر برای این بازه زمانی
+                try:
+                    recent = news_df[news_df['ts'] >= threshold]
                     result[f'news_count_{rng}'] = len(recent)
                     
                     if len(recent) > 0 and 'sentiment_score' in recent.columns:
@@ -920,8 +936,9 @@ def build_features(candles_df, news_df, symbol):
                         result[f'news_sentiment_min_{rng}'] = 0.0
                         result[f'news_pos_ratio_{rng}'] = 0.0
                         result[f'news_neg_ratio_{rng}'] = 0.0
-                else:
-                    # اگر ستون زمان نداریم، مقادیر پیش‌فرض را قرار می‌دهیم
+                except Exception as e:
+                    logger.error(f"Error processing news for range {rng}: {e}")
+                    # مقادیر پیش‌فرض در صورت خطا
                     result[f'news_count_{rng}'] = 0
                     result[f'news_sentiment_mean_{rng}'] = 0.0
                     result[f'news_sentiment_max_{rng}'] = 0.0
@@ -1031,7 +1048,7 @@ def calculate_news_features(news_df, candles_df):
     result = pd.DataFrame()
     
     try:
-        now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(time.time())
+        now_ts = int(time.time())
     
         # بررسی وجود ستون sentiment_score
         if 'sentiment_score' in news_df.columns:
@@ -1066,23 +1083,39 @@ def calculate_news_features(news_df, candles_df):
             ts_column = 'ts' if 'ts' in news_df.columns else 'published_at'
             
             if ts_column in news_df.columns:
+                # اطمینان از اینکه ts صحیح است
+                if pd.api.types.is_datetime64_dtype(news_df[ts_column]):
+                    news_df[ts_column] = news_df[ts_column].astype('int64') // 10**9
+                
                 # محاسبه فیچرها برای هر بازه زمانی
                 for rng, seconds in ranges.items():
-                    recent = news_df[news_df[ts_column] >= now_ts - seconds]
-                    result[f'news_count_{rng}'] = [len(recent)]
+                    now_ts_int = int(now_ts)
+                    threshold = now_ts_int - int(seconds)
                     
-                    if len(recent) > 0:
-                        s = recent['sentiment_score']
-                        result[f'news_sentiment_mean_{rng}'] = [s.mean()]
-                        result[f'news_sentiment_max_{rng}'] = [s.max()]
-                        result[f'news_sentiment_min_{rng}'] = [s.min()]
-                        result[f'news_pos_ratio_{rng}'] = [(s > 0.1).mean()]
-                        result[f'news_neg_ratio_{rng}'] = [(s < -0.1).mean()]
+                    try:
+                        recent = news_df[news_df[ts_column] >= threshold]
+                        result[f'news_count_{rng}'] = [len(recent)]
                         
-                        # امتیاز وزن‌دار
-                        weighted_score += s.mean() * weights[rng]
-                        total_weight += weights[rng]
-                    else:
+                        if len(recent) > 0:
+                            s = recent['sentiment_score']
+                            result[f'news_sentiment_mean_{rng}'] = [s.mean()]
+                            result[f'news_sentiment_max_{rng}'] = [s.max()]
+                            result[f'news_sentiment_min_{rng}'] = [s.min()]
+                            result[f'news_pos_ratio_{rng}'] = [(s > 0.1).mean()]
+                            result[f'news_neg_ratio_{rng}'] = [(s < -0.1).mean()]
+                            
+                            # امتیاز وزن‌دار
+                            weighted_score += s.mean() * weights[rng]
+                            total_weight += weights[rng]
+                        else:
+                            result[f'news_sentiment_mean_{rng}'] = [0.0]
+                            result[f'news_sentiment_max_{rng}'] = [0.0]
+                            result[f'news_sentiment_min_{rng}'] = [0.0]
+                            result[f'news_pos_ratio_{rng}'] = [0.0]
+                            result[f'news_neg_ratio_{rng}'] = [0.0]
+                    except Exception as e:
+                        logger.error(f"Error calculating news features for range {rng}: {e}")
+                        result[f'news_count_{rng}'] = [0]
                         result[f'news_sentiment_mean_{rng}'] = [0.0]
                         result[f'news_sentiment_max_{rng}'] = [0.0]
                         result[f'news_sentiment_min_{rng}'] = [0.0]
