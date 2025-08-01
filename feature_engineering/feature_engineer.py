@@ -1023,13 +1023,6 @@ def build_features(candles_df, news_df, symbol):
 def calculate_news_features(news_df, candles_df):
     """
     محاسبه فیچرهای مبتنی بر اخبار و سنتیمنت
-    
-    Args:
-        news_df: دیتافریم خبرها
-        candles_df: دیتافریم کندل‌ها (برای استفاده از زمان)
-        
-    Returns:
-        DataFrame: دیتافریم حاوی فیچرهای خبری
     """
     if news_df is None or news_df.empty:
         return pd.DataFrame()
@@ -1039,92 +1032,90 @@ def calculate_news_features(news_df, candles_df):
     
     try:
         now_ts = candles_df['timestamp'].values[-1] if candles_df is not None and not candles_df.empty and 'timestamp' in candles_df else int(time.time())
-    except:
-        now_ts = int(time.time())
     
-    # بررسی وجود ستون sentiment_score
-    if 'sentiment_score' in news_df.columns:
-        # فیچرهای پایه
-        result['news_count'] = [len(news_df)]
-        result['news_sentiment_mean'] = [news_df['sentiment_score'].mean()]
-        result['news_sentiment_std'] = [news_df['sentiment_score'].std()]
-        
-        # تعداد اخبار مثبت و منفی
-        result['news_pos_count'] = [len(news_df[news_df['sentiment_score'] > 0.1])]
-        result['news_neg_count'] = [len(news_df[news_df['sentiment_score'] < -0.1])]
-        
-        # تازه‌ترین خبر
-        result['news_latest_sentiment'] = [news_df['sentiment_score'].iloc[0] if len(news_df) > 0 else 0.0]
-        
-        # طول محتوا
-        if 'content' in news_df.columns:
-            result['news_content_len'] = [news_df['content'].str.len().mean()]
-        else:
-            result['news_content_len'] = [0.0]
+        # بررسی وجود ستون sentiment_score
+        if 'sentiment_score' in news_df.columns:
+            # فیچرهای پایه
+            result['news_count'] = [len(news_df)]
+            result['news_sentiment_mean'] = [news_df['sentiment_score'].mean()]
+            result['news_sentiment_std'] = [news_df['sentiment_score'].std()]
             
-        # تعریف بازه‌های زمانی
-        ranges = {
-            '1h': 1*60*60, '6h': 6*60*60, '12h': 12*60*60, '24h': 24*60*60,
-            '36h': 36*60*60, '48h': 48*60*60, '50h': 50*60*60, '62h': 62*60*60,
-        }
-        weights = {'1h': 1.0, '6h': 0.8, '12h': 0.7, '24h': 0.6, '36h': 0.5, '48h': 0.4, '50h': 0.3, '62h': 0.2}
-        weighted_score = 0.0
-        total_weight = 0.0
-        
-        # انتخاب ستون زمان مناسب
-        ts_column = 'ts' if 'ts' in news_df.columns else 'published_at'
-        
-        if ts_column in news_df.columns:
-            # محاسبه فیچرها برای هر بازه زمانی
-            for rng, seconds in ranges.items():
-                recent = news_df[news_df[ts_column] >= now_ts - seconds]
-                result[f'news_count_{rng}'] = [len(recent)]
-                
-                if len(recent) > 0:
-                    s = recent['sentiment_score']
-                    result[f'news_sentiment_mean_{rng}'] = [s.mean()]
-                    result[f'news_sentiment_max_{rng}'] = [s.max()]
-                    result[f'news_sentiment_min_{rng}'] = [s.min()]
-                    result[f'news_pos_ratio_{rng}'] = [(s > 0.1).mean()]
-                    result[f'news_neg_ratio_{rng}'] = [(s < -0.1).mean()]
-                    
-                    # امتیاز وزن‌دار
-                    weighted_score += s.mean() * weights[rng]
-                    total_weight += weights[rng]
-                else:
-                    result[f'news_sentiment_mean_{rng}'] = [0.0]
-                    result[f'news_sentiment_max_{rng}'] = [0.0]
-                    result[f'news_sentiment_min_{rng}'] = [0.0]
-                    result[f'news_pos_ratio_{rng}'] = [0.0]
-                    result[f'news_neg_ratio_{rng}'] = [0.0]
+            # تعداد اخبار مثبت و منفی
+            result['news_pos_count'] = [len(news_df[news_df['sentiment_score'] > 0.1])]
+            result['news_neg_count'] = [len(news_df[news_df['sentiment_score'] < -0.1])]
             
-            # محاسبه امتیاز وزن‌دار نهایی
-            if total_weight > 0:
-                result['news_weighted_score'] = [weighted_score / total_weight]
+            # تازه‌ترین خبر
+            result['news_latest_sentiment'] = [news_df['sentiment_score'].iloc[0] if len(news_df) > 0 else 0.0]
+            
+            # طول محتوا
+            if 'content' in news_df.columns:
+                result['news_content_len'] = [news_df['content'].str.len().mean()]
             else:
-                result['news_weighted_score'] = [0.0]
+                result['news_content_len'] = [0.0]
                 
-            # فیچرهای پیشرفته خبری اضافی
-            if USE_FINBERT and 'content' in news_df.columns:
-                # تعداد اخبار با احساسات قوی
-                result['strong_positive_news'] = [len(news_df[news_df['sentiment_score'] > 0.8])]
-                result['strong_negative_news'] = [len(news_df[news_df['sentiment_score'] < -0.8])]
+            # تعریف بازه‌های زمانی
+            ranges = {
+                '1h': 1*60*60, '6h': 6*60*60, '12h': 12*60*60, '24h': 24*60*60,
+                '36h': 36*60*60, '48h': 48*60*60, '50h': 50*60*60, '62h': 62*60*60,
+            }
+            weights = {'1h': 1.0, '6h': 0.8, '12h': 0.7, '24h': 0.6, '36h': 0.5, '48h': 0.4, '50h': 0.3, '62h': 0.2}
+            weighted_score = 0.0
+            total_weight = 0.0
+            
+            # انتخاب ستون زمان مناسب
+            ts_column = 'ts' if 'ts' in news_df.columns else 'published_at'
+            
+            if ts_column in news_df.columns:
+                # محاسبه فیچرها برای هر بازه زمانی
+                for rng, seconds in ranges.items():
+                    recent = news_df[news_df[ts_column] >= now_ts - seconds]
+                    result[f'news_count_{rng}'] = [len(recent)]
+                    
+                    if len(recent) > 0:
+                        s = recent['sentiment_score']
+                        result[f'news_sentiment_mean_{rng}'] = [s.mean()]
+                        result[f'news_sentiment_max_{rng}'] = [s.max()]
+                        result[f'news_sentiment_min_{rng}'] = [s.min()]
+                        result[f'news_pos_ratio_{rng}'] = [(s > 0.1).mean()]
+                        result[f'news_neg_ratio_{rng}'] = [(s < -0.1).mean()]
+                        
+                        # امتیاز وزن‌دار
+                        weighted_score += s.mean() * weights[rng]
+                        total_weight += weights[rng]
+                    else:
+                        result[f'news_sentiment_mean_{rng}'] = [0.0]
+                        result[f'news_sentiment_max_{rng}'] = [0.0]
+                        result[f'news_sentiment_min_{rng}'] = [0.0]
+                        result[f'news_pos_ratio_{rng}'] = [0.0]
+                        result[f'news_neg_ratio_{rng}'] = [0.0]
                 
-                # نسبت اخبار مثبت به منفی
-                pos_count = result['news_pos_count'].iloc[0]
-                neg_count = result['news_neg_count'].iloc[0]
-                if neg_count > 0:
-                    result['pos_to_neg_ratio'] = [pos_count / neg_count]
+                # محاسبه امتیاز وزن‌دار نهایی
+                if total_weight > 0:
+                    result['news_weighted_score'] = [weighted_score / total_weight]
                 else:
-                    result['pos_to_neg_ratio'] = [pos_count if pos_count > 0 else 1.0]
-                
-                # روند تغییر احساسات
-                if len(news_df) >= 10:
-                    first_half = news_df.iloc[:len(news_df)//2]['sentiment_score'].mean()
-                    second_half = news_df.iloc[len(news_df)//2:]['sentiment_score'].mean()
-                    result['sentiment_trend'] = [second_half - first_half]
-                else:
-                    result['sentiment_trend'] = [0.0]
+                    result['news_weighted_score'] = [0.0]
+                    
+                # فیچرهای پیشرفته خبری اضافی
+                if USE_FINBERT and 'content' in news_df.columns:
+                    # تعداد اخبار با احساسات قوی
+                    result['strong_positive_news'] = [len(news_df[news_df['sentiment_score'] > 0.8])]
+                    result['strong_negative_news'] = [len(news_df[news_df['sentiment_score'] < -0.8])]
+                    
+                    # نسبت اخبار مثبت به منفی
+                    pos_count = result['news_pos_count'].iloc[0]
+                    neg_count = result['news_neg_count'].iloc[0]
+                    if neg_count > 0:
+                        result['pos_to_neg_ratio'] = [pos_count / neg_count]
+                    else:
+                        result['pos_to_neg_ratio'] = [pos_count if pos_count > 0 else 1.0]
+                    
+                    # روند تغییر احساسات
+                    if len(news_df) >= 10:
+                        first_half = news_df.iloc[:len(news_df)//2]['sentiment_score'].mean()
+                        second_half = news_df.iloc[len(news_df)//2:]['sentiment_score'].mean()
+                        result['sentiment_trend'] = [second_half - first_half]
+                    else:
+                        result['sentiment_trend'] = [0.0]
     
     except Exception as e:
         logger.error(f"Error calculating news features: {e}")
