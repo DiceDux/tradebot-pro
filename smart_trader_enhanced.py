@@ -1,5 +1,5 @@
 """
-راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته (نسخه بهینه شده)
+راه‌اندازی کننده اصلی سیستم معاملاتی پیشرفته (نسخه اصلاح شده)
 """
 import argparse
 import time
@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import random
 from sklearn.utils import resample
 from orchestrator.trading_orchestrator import TradingOrchestrator
 from feature_store.feature_calculator import FeatureCalculator
@@ -52,10 +53,10 @@ def prepare_historical_training_data(symbol):
     # استفاده بهینه از داده‌های موجود بر اساس نوع ارز
     if symbol in ["BTCUSDT", "ETHUSDT"]:
         candles_limit = 15000  # برای بیت‌کوین و اتریوم که ~17000 کندل داریم
-        news_limit = 5000  # برای اخبار بیت‌کوین (~22500) و اتریوم (~14800)
+        news_limit = 2500  # برای اخبار بیت‌کوین و اتریوم
     else:
         candles_limit = 10000  # برای سایر ارزها
-        news_limit = 3000  # برای سایر ارزها
+        news_limit = 2000  # برای سایر ارزها
         
     candles = get_latest_candles(symbol, candles_limit)
     news = get_latest_news(symbol, news_limit)
@@ -64,60 +65,84 @@ def prepare_historical_training_data(symbol):
         print(f"Error: No candle data available for {symbol}")
         return None
     
-    print(f"Data loaded: {len(candles)} candles and {len(news)} news items")
-    print("Building features...")
+    # بررسی تغییرات قیمت در داده‌های تاریخی
+    candles['pct_change'] = candles['close'].pct_change()
+    price_changes = candles['pct_change'].dropna()
     
+    print(f"Data loaded: {len(candles)} candles and {len(news)} news items")
+    print(f"Price change statistics: min={price_changes.min():.4f}, max={price_changes.max():.4f}, mean={price_changes.mean():.4f}, std={price_changes.std():.4f}")
+    
+    # حذف داده‌های با تغییرات بیش از حد (احتمالاً خطا)
+    candles = candles[candles['pct_change'].abs() < 0.2]  # حذف تغییرات بیش از 20%
+    
+    print("Building features...")
     # ساخت فیچرها
     features = build_features(candles, news, symbol)
     
     print("Creating target variables with multiple prediction horizons...")
     
-    # افق‌های پیش‌بینی متنوع - تطبیق داده شده با بازه‌های معاملاتی 4 ساعته
-    # برای بازه 4 ساعته، معادل روزانه = 6 کندل، هفتگی = 42 کندل، ماهانه ~180 کندل
-    prediction_horizons = [1, 3, 6, 12, 24, 42]  # از خیلی کوتاه‌مدت تا میان‌مدت
+    # دسته‌بندی داده‌ها به گروه‌های زمانی برای حفظ تنوع
+    time_periods = []
+    # تقسیم داده‌ها به 5 دوره زمانی (برای تنوع بیشتر)
+    period_size = len(candles) // 5
+    for i in range(5):
+        start_idx = i * period_size
+        end_idx = (i + 1) * period_size
+        time_periods.append((start_idx, end_idx))
+    
+    # افق‌های پیش‌بینی متنوع
+    # کوتاه، متوسط و بلندمدت
+    prediction_horizons = [1, 3, 6, 12, 24]
     
     # آستانه‌های متفاوت برای طبقه‌بندی
+    # شروع با آستانه‌های کوچک‌تر برای اطمینان از تنوع کلاس‌ها
     threshold_pairs = [
+        (-0.002, 0.002),  # بسیار حساس: 0.2% تغییر قیمت
         (-0.005, 0.005),  # استاندارد: 0.5% تغییر قیمت
-        (-0.008, 0.008),  # تهاجمی‌تر: 0.8% تغییر قیمت
-        (-0.003, 0.003),  # محافظه‌کارانه‌تر: 0.3% تغییر قیمت
+        (-0.01, 0.01),    # تهاجمی: 1% تغییر قیمت
     ]
     
     all_training_data = []
     
     # ایجاد نمونه‌های آموزشی با افق‌ها و آستانه‌های مختلف
-    for horizon in prediction_horizons:
-        for neg_threshold, pos_threshold in threshold_pairs:
-            # کپی از فیچرها
-            features_copy = features.copy()
-            
-            # محاسبه بازدهی آینده
-            features_copy[f'future_price_{horizon}'] = candles['close'].shift(-horizon)
-            features_copy[f'future_pct_change_{horizon}'] = features_copy[f'future_price_{horizon}'] / features_copy['close'] - 1
-            
-            # طبقه‌بندی به سه گروه با آستانه‌های متفاوت
-            bins = [-float('inf'), neg_threshold, pos_threshold, float('inf')]
-            labels = [0, 1, 2]  # Sell, Hold, Buy
-            features_copy['target'] = pd.cut(features_copy[f'future_pct_change_{horizon}'], bins=bins, labels=labels)
-            
-            # حذف ردیف‌های بدون مقدار هدف
-            features_copy = features_copy.dropna(subset=['target']).copy()
-            
-            if not features_copy.empty:
-                # تبدیل به عدد صحیح
-                features_copy['target'] = features_copy['target'].astype(int)
+    for period_start, period_end in time_periods:
+        period_candles = candles.iloc[period_start:period_end].copy()
+        period_features = features.iloc[period_start:period_end].copy()
+        
+        print(f"Processing time period with {len(period_candles)} candles")
+        
+        for horizon in prediction_horizons:
+            for neg_threshold, pos_threshold in threshold_pairs:
+                # محاسبه بازدهی آینده
+                period_features[f'future_price_{horizon}'] = period_candles['close'].shift(-horizon)
+                period_features[f'future_pct_change_{horizon}'] = (
+                    period_features[f'future_price_{horizon}'] / period_candles['close'] - 1
+                )
                 
-                # اضافه کردن ستون افق و آستانه برای ردیابی
-                features_copy['prediction_horizon'] = horizon
-                features_copy['threshold_negative'] = neg_threshold
-                features_copy['threshold_positive'] = pos_threshold
+                # طبقه‌بندی به سه گروه با آستانه‌های متفاوت
+                bins = [-float('inf'), neg_threshold, pos_threshold, float('inf')]
+                labels = [0, 1, 2]  # Sell, Hold, Buy
+                period_features['target'] = pd.cut(period_features[f'future_pct_change_{horizon}'], 
+                                                 bins=bins, labels=labels)
                 
-                # افزودن به داده‌های آموزشی
-                all_training_data.append(features_copy)
+                # حذف ردیف‌های بدون مقدار هدف
+                valid_data = period_features.dropna(subset=['target']).copy()
                 
-                # گزارش توزیع کلاس‌ها برای این افق و آستانه
-                class_counts = features_copy['target'].value_counts()
-                print(f"Horizon {horizon}, Thresholds {neg_threshold}/{pos_threshold}: {class_counts.to_dict()}")
+                if not valid_data.empty:
+                    # تبدیل به عدد صحیح
+                    valid_data['target'] = valid_data['target'].astype(int)
+                    
+                    # اضافه کردن ستون افق و آستانه برای ردیابی
+                    valid_data['prediction_horizon'] = horizon
+                    valid_data['threshold_negative'] = neg_threshold
+                    valid_data['threshold_positive'] = pos_threshold
+                    
+                    # افزودن به داده‌های آموزشی
+                    all_training_data.append(valid_data)
+                    
+                    # گزارش توزیع کلاس‌ها برای این افق و آستانه
+                    class_counts = valid_data['target'].value_counts()
+                    print(f"Horizon {horizon}, Thresholds {neg_threshold}/{pos_threshold}: {class_counts.to_dict()}")
     
     # ترکیب تمام داده‌ها
     if all_training_data:
@@ -136,53 +161,115 @@ def prepare_historical_training_data(symbol):
         for cls, count in final_class_counts.items():
             print(f"Class {cls}: {count} samples ({count/len(final_training_data)*100:.1f}%)")
         
-        # متعادل‌سازی داده‌ها (نمونه‌گیری مجدد)
-        # هدف: داشتن حداقل 300 نمونه از هر کلاس و حداکثر 5000 نمونه از هر کلاس
-        balanced_dfs = []
+        # بررسی تعداد کلاس‌های منحصر به فرد
+        unique_classes = final_class_counts.index.tolist()
         
-        # برای هر کلاس
-        target_min_samples = 300
-        target_max_samples = 5000
-        
-        for cls in range(3):  # 0, 1, 2 = Sell, Hold, Buy
-            cls_data = final_training_data[final_training_data['target'] == cls]
-            cls_count = len(cls_data)
+        # اگر فقط یک کلاس داریم، باید روشی برای ایجاد مصنوعی نمونه‌های کلاس‌های دیگر پیدا کنیم
+        if len(unique_classes) == 1:
+            print("\nWARNING: Only one class found in the dataset. Creating synthetic samples for other classes...")
             
-            if cls_count < target_min_samples:
-                # اگر تعداد نمونه‌ها کمتر از حداقل است، نمونه‌گیری مجدد با جایگذاری
-                resampled = resample(
-                    cls_data, 
-                    replace=True,
-                    n_samples=target_min_samples,
-                    random_state=42
-                )
-                balanced_dfs.append(resampled)
-                print(f"Class {cls} upsampled: {cls_count} -> {target_min_samples}")
-            elif cls_count > target_max_samples:
-                # اگر تعداد نمونه‌ها بیشتر از حداکثر است، کاهش تعداد نمونه‌ها
-                resampled = resample(
-                    cls_data, 
-                    replace=False,
-                    n_samples=target_max_samples,
-                    random_state=42
-                )
-                balanced_dfs.append(resampled)
-                print(f"Class {cls} downsampled: {cls_count} -> {target_max_samples}")
-            else:
-                # اگر تعداد نمونه‌ها در محدوده مناسب است، بدون تغییر استفاده کنید
-                balanced_dfs.append(cls_data)
-                print(f"Class {cls} kept as is: {cls_count} samples")
+            # ایجاد نمونه‌های مصنوعی برای کلاس‌های غایب
+            base_samples = final_training_data.copy()
+            
+            # حذف ستون‌های پیش‌بینی افق و آستانه
+            if 'prediction_horizon' in base_samples.columns:
+                base_samples = base_samples.drop(['prediction_horizon'], axis=1)
+            if 'threshold_negative' in base_samples.columns:
+                base_samples = base_samples.drop(['threshold_negative'], axis=1)
+            if 'threshold_positive' in base_samples.columns:
+                base_samples = base_samples.drop(['threshold_positive'], axis=1)
+            
+            # یافتن ستون‌های عددی که می‌توانیم تغییر دهیم
+            numeric_columns = base_samples.select_dtypes(include=['float64', 'int64']).columns.tolist()
+            numeric_columns = [col for col in numeric_columns if col != 'target']
+            
+            synthetic_samples = []
+            
+            # برای هر کلاس غایب، نمونه‌های مصنوعی ایجاد می‌کنیم
+            for cls in [0, 1, 2]:
+                if cls not in unique_classes:
+                    print(f"Creating synthetic samples for class {cls}...")
+                    
+                    # تعداد نمونه‌های مصنوعی که باید ایجاد کنیم
+                    n_synthetic = min(300, len(base_samples))
+                    
+                    # انتخاب تصادفی نمونه‌های پایه
+                    base_indices = np.random.choice(base_samples.index, size=n_synthetic, replace=True)
+                    synthetic_class = base_samples.loc[base_indices].copy()
+                    
+                    # تغییر مقادیر عددی برای ایجاد تنوع
+                    for col in numeric_columns:
+                        if col in synthetic_class.columns:
+                            # محاسبه انحراف استاندارد و میانگین
+                            mean_val = synthetic_class[col].mean()
+                            std_val = synthetic_class[col].std() if synthetic_class[col].std() > 0 else 0.1
+                            
+                            # اعمال تغییرات تصادفی
+                            noise = np.random.normal(0, std_val, size=len(synthetic_class))
+                            if cls == 0:  # Sell - تغییرات منفی بیشتر
+                                synthetic_class[col] = synthetic_class[col] + noise * 0.5 - std_val * 0.5
+                            elif cls == 2:  # Buy - تغییرات مثبت بیشتر
+                                synthetic_class[col] = synthetic_class[col] + noise * 0.5 + std_val * 0.5
+                            else:  # Hold - تغییرات کمتر
+                                synthetic_class[col] = synthetic_class[col] + noise * 0.3
+                    
+                    # تغییر برچسب کلاس
+                    synthetic_class['target'] = cls
+                    
+                    synthetic_samples.append(synthetic_class)
+            
+            # افزودن نمونه‌های مصنوعی به داده‌های اصلی
+            if synthetic_samples:
+                final_training_data = pd.concat([final_training_data] + synthetic_samples)
+                
+                # بررسی توزیع بعد از افزودن نمونه‌های مصنوعی
+                final_class_counts = final_training_data['target'].value_counts()
+                print("\nClass distribution after adding synthetic samples:")
+                for cls, count in final_class_counts.items():
+                    print(f"Class {cls}: {count} samples ({count/len(final_training_data)*100:.1f}%)")
         
-        # ترکیب داده‌های متعادل شده
-        balanced_training_data = pd.concat(balanced_dfs)
+        # متعادل‌سازی داده‌ها فقط اگر بیش از یک کلاس داریم
+        if len(final_class_counts) > 1:
+            # برای هر کلاس
+            balanced_dfs = []
+            target_min_samples = 300
+            
+            for cls in range(3):  # 0, 1, 2 = Sell, Hold, Buy
+                if cls in final_class_counts:
+                    cls_data = final_training_data[final_training_data['target'] == cls]
+                    cls_count = len(cls_data)
+                    
+                    if cls_count < target_min_samples:
+                        # اگر تعداد نمونه‌ها کمتر از حداقل است، نمونه‌گیری مجدد با جایگذاری
+                        # مطمئن شویم که حداقل یک نمونه داریم
+                        if cls_count > 0:
+                            resampled = resample(
+                                cls_data,
+                                replace=True,
+                                n_samples=target_min_samples,
+                                random_state=42
+                            )
+                            balanced_dfs.append(resampled)
+                            print(f"Class {cls} upsampled: {cls_count} -> {target_min_samples}")
+                    else:
+                        # اگر تعداد نمونه‌ها کافی است، بدون تغییر استفاده کنید
+                        balanced_dfs.append(cls_data)
+                        print(f"Class {cls} kept as is: {cls_count} samples")
+            
+            # ترکیب داده‌های متعادل شده
+            balanced_training_data = pd.concat(balanced_dfs)
+        else:
+            # اگر فقط یک کلاس داریم، از داده‌های فعلی استفاده می‌کنیم
+            balanced_training_data = final_training_data
         
         # برچسب‌گذاری کلاس‌ها برای خوانایی بهتر
         class_names = {0: "Sell", 1: "Hold", 2: "Buy"}
         
-        # بررسی توزیع بعد از متعادل‌سازی
+        # بررسی توزیع نهایی
         balanced_counts = balanced_training_data['target'].value_counts()
         print("\nFinal class distribution after balancing:")
-        for cls, count in balanced_counts.items():
+        for cls in sorted(balanced_counts.index):
+            count = balanced_counts[cls]
             print(f"Class {cls} ({class_names[cls]}): {count} samples ({count/len(balanced_training_data)*100:.1f}%)")
         
         print(f"\nFinal training dataset size: {len(balanced_training_data)} samples")
