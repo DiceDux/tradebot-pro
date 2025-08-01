@@ -1,45 +1,19 @@
-"""
-محاسبه فیچرهای پیشرفته برای تحلیل بازار
-با استفاده از ترکیب فیچرهای تکنیکال، آماری، خبری و فاندامنتال
-"""
 import pandas as pd
 import numpy as np
 import time
 import random
 from datetime import datetime
-import logging
-import os
 from .feature_config import FEATURE_CONFIG
 
-# تنظیم لاگر
-logger = logging.getLogger("feature_engineer")
-os.makedirs('logs', exist_ok=True)
-file_handler = logging.FileHandler('logs/features.log')
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(file_handler)
-logger.setLevel(logging.INFO)
-
-# بارگیری کتابخانه‌ها با مدیریت خطا
 try:
     import ta
 except ImportError:
     ta = None
-    logger.warning("ta library not available, some features will be disabled")
 
 try:
     import talib
 except ImportError:
     talib = None
-    logger.warning("talib library not available, some pattern features will be disabled")
-
-try:
-    # برای استفاده از FinBERT برای تحلیل احساسات خبرها
-    from feature_engineering.sentiment_finbert import analyze_sentiment_finbert
-    USE_FINBERT = True
-    logger.info("FinBERT model loaded for sentiment analysis")
-except ImportError:
-    USE_FINBERT = False
-    logger.warning("FinBERT not available, falling back to basic sentiment analysis")
 
 def safe_ema(close, span):
     if len(close) >= span:
@@ -145,7 +119,7 @@ def build_features(candles_df, news_df, symbol):
     
     # === بررسی و اصلاح داده های ورودی ===
     if candles_df is None or candles_df.empty:
-        logger.warning(f"Empty candle data provided for {symbol}")
+        print(f"Warning: Empty candle data provided for {symbol}")
         return pd.DataFrame([{}])
     
     # اطمینان از وجود ستون‌های اصلی
@@ -155,9 +129,9 @@ def build_features(candles_df, news_df, symbol):
             if col == 'timestamp' and 'time' in candles_df.columns:
                 # برخی دیتابیس‌ها از 'time' به جای 'timestamp' استفاده می‌کنند
                 candles_df['timestamp'] = candles_df['time']
-                logger.info(f"Using 'time' column as 'timestamp' for {symbol}")
+                print(f"Using 'time' column as 'timestamp' for {symbol}")
             else:
-                logger.warning(f"Missing required column '{col}' in candle data for {symbol}")
+                print(f"Warning: Missing required column '{col}' in candle data for {symbol}")
                 candles_df[col] = 0.0
     
     # === رفع مشکل اطلاعات اخبار ===
@@ -172,12 +146,10 @@ def build_features(candles_df, news_df, symbol):
         # بررسی و تبدیل ستون‌های زمان برای اخبار
         if 'ts' not in news_df.columns:
             if 'published_at' in news_df.columns:
-                logger.info(f"Converting 'published_at' to 'ts' for {symbol} news ({len(news_df)} items)")
                 print(f"Converting 'published_at' to 'ts' for {symbol} news ({len(news_df)} items)")
                 
                 # بررسی نوع داده published_at
                 sample = news_df['published_at'].iloc[0] if len(news_df) > 0 else None
-                logger.info(f"Sample published_at value: {sample} (type: {type(sample).__name__})")
                 print(f"Sample published_at value: {sample} (type: {type(sample).__name__})")
                 
                 try:
@@ -185,27 +157,23 @@ def build_features(candles_df, news_df, symbol):
                     if pd.api.types.is_datetime64_dtype(news_df['published_at']):
                         # تبدیل صحیح به int64 و سپس به timestamp
                         news_df['ts'] = news_df['published_at'].astype('int64') // 10**9
-                        logger.info("Converted datetime64 values to Unix timestamps")
                         print("Converted datetime64 values to Unix timestamps")
                     
                     # اگر نوع داده رشته است
                     elif pd.api.types.is_string_dtype(news_df['published_at']):
                         # تبدیل رشته به datetime64 و سپس به timestamp
                         news_df['ts'] = pd.to_datetime(news_df['published_at']).astype('int64') // 10**9
-                        logger.info("Converted string date values to Unix timestamps")
                         print("Converted string date values to Unix timestamps")
                     
                     # اگر عدد صحیح است
                     elif pd.api.types.is_integer_dtype(news_df['published_at']):
                         # اگر قبلاً timestamp است، مستقیماً استفاده می‌کنیم
                         news_df['ts'] = news_df['published_at']
-                        logger.info("Using existing integer timestamps")
                         print("Using existing integer timestamps")
                     
                     else:
                         # تلاش برای تبدیل با to_datetime
                         news_df['ts'] = pd.to_datetime(news_df['published_at']).astype('int64') // 10**9
-                        logger.info("Successfully converted to timestamps with generic method")
                         print("Successfully converted to timestamps with generic method")
                     
                     # گزارش نتایج تبدیل
@@ -218,7 +186,6 @@ def build_features(candles_df, news_df, symbol):
                         oldest_hours = (now_ts - oldest_ts) / 3600
                         newest_hours = (now_ts - newest_ts) / 3600
                         
-                        logger.info(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
                         print(f"News timespan: {oldest_hours:.1f} hours ago to {newest_hours:.1f} hours ago")
                         
                         # آمار توزیع اخبار در بازه‌های زمانی
@@ -227,14 +194,11 @@ def build_features(candles_df, news_df, symbol):
                         h24 = len(news_df[news_df['ts'] >= now_ts - 86400])
                         h72 = len(news_df[news_df['ts'] >= now_ts - 259200])
                         
-                        logger.info(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
                         print(f"News distribution: 1h: {h1}, 6h: {h6}, 24h: {h24}, 72h: {h72}, Total: {len(news_df)}")
                     
                 except Exception as e:
-                    logger.error(f"Error in timestamp conversion: {e}")
                     print(f"Error in timestamp conversion: {e}")
                     # روش جایگزین با استفاده از strptime
-                    logger.info("Using direct string parsing with strptime")
                     print("Using direct string parsing with strptime")
                     ts_values = []
                     
@@ -259,33 +223,14 @@ def build_features(candles_df, news_df, symbol):
                     
                     news_df['ts'] = ts_values
             else:
-                logger.warning(f"No 'published_at' column found in news data for {symbol}")
                 print(f"Warning: No 'published_at' column found in news data for {symbol}")
                 # ایجاد ستون ts با مقادیر پیش‌فرض
                 news_df['ts'] = int(time.time())
         
         # اطمینان از وجود sentiment_score
         if 'sentiment_score' not in news_df.columns:
-            logger.warning(f"No sentiment_score column in news data for {symbol}")
             print(f"Warning: No sentiment_score column in news data for {symbol}")
-            
-            # استفاده از FinBERT برای محاسبه امتیاز احساسات
-            if USE_FINBERT and 'content' in news_df.columns:
-                logger.info(f"Using FinBERT to calculate sentiment scores for {len(news_df)} news items")
-                print(f"Using FinBERT to calculate sentiment scores for {len(news_df)} news items")
-                sentiment_scores = []
-                
-                for content in news_df['content']:
-                    try:
-                        score = analyze_sentiment_finbert(content)
-                        sentiment_scores.append(score)
-                    except Exception as e:
-                        logger.error(f"Error calculating FinBERT sentiment: {e}")
-                        sentiment_scores.append(0.0)
-                
-                news_df['sentiment_score'] = sentiment_scores
-            else:
-                news_df['sentiment_score'] = 0.0
+            news_df['sentiment_score'] = 0.0
         
         # تبدیل sentiment_score به عدد
         news_df['sentiment_score'] = pd.to_numeric(news_df['sentiment_score'], errors='coerce').fillna(0.0)
@@ -304,7 +249,6 @@ def build_features(candles_df, news_df, symbol):
             debug_info['candle_count'] = len(close)
             debug_info['price_latest'] = close.values[-1] if len(close) > 0 else 0
         except Exception as e:
-            logger.error(f"Error preparing candle data: {e}")
             print(f"Error preparing candle data: {e}")
             # ایجاد سری‌های خالی
             close = pd.Series([])
@@ -316,65 +260,65 @@ def build_features(candles_df, news_df, symbol):
         # EMA ها
         for ema_span in [5, 9, 10, 20, 21, 50, 100, 200]:
             k = f'ema{ema_span}'
-            if FEATURE_CONFIG.get(k, True):  # پیش‌فرض فعال
+            if FEATURE_CONFIG.get(k):
                 features[k] = safe_ema(close, ema_span)
 
         # SMA ها
         for sma_win in [20, 50]:
             k = f'sma{sma_win}'
-            if FEATURE_CONFIG.get(k, True):
+            if FEATURE_CONFIG.get(k):
                 features[k] = safe_sma(close, sma_win)
 
         # TEMA
-        if FEATURE_CONFIG.get('tema20', True):
+        if FEATURE_CONFIG.get('tema20'):
             features['tema20'] = safe_tema(close, 20)
 
         # RSI
-        if FEATURE_CONFIG.get('rsi14', True):
+        if FEATURE_CONFIG.get('rsi14'):
             features['rsi14'] = safe_rsi(close, 14)
 
         # ATR
-        if FEATURE_CONFIG.get('atr14', True):
+        if FEATURE_CONFIG.get('atr14'):
             features['atr14'] = safe_atr(high, low, close, 14)
 
         # MACD
         macd, macd_signal, macd_hist = safe_macd(close, 12, 26, 9)
-        if FEATURE_CONFIG.get('macd', True): features['macd'] = macd
-        if FEATURE_CONFIG.get('macd_signal', True): features['macd_signal'] = macd_signal
-        if FEATURE_CONFIG.get('macd_hist', True): features['macd_hist'] = macd_hist
+        if FEATURE_CONFIG.get('macd'): features['macd'] = macd
+        if FEATURE_CONFIG.get('macd_signal'): features['macd_signal'] = macd_signal
+        if FEATURE_CONFIG.get('macd_hist'): features['macd_hist'] = macd_hist
 
         # Bollinger Bands
         bb_upper, bb_lower, bb_width = safe_bb(close, 20)
-        if FEATURE_CONFIG.get('bb_upper', True): features['bb_upper'] = bb_upper
-        if FEATURE_CONFIG.get('bb_lower', True): features['bb_lower'] = bb_lower
-        if FEATURE_CONFIG.get('bb_width', True): features['bb_width'] = bb_width
+        if FEATURE_CONFIG.get('bb_upper'): features['bb_upper'] = bb_upper
+        if FEATURE_CONFIG.get('bb_lower'): features['bb_lower'] = bb_lower
+        if FEATURE_CONFIG.get('bb_width'): features['bb_width'] = bb_width
 
         # OBV
-        if FEATURE_CONFIG.get("obv", True):
+        if FEATURE_CONFIG.get("obv"):
             features['obv'] = calculate_obv(candles_df)
 
         # VWAP
-        if FEATURE_CONFIG.get("vwap", True):
+        if FEATURE_CONFIG.get("vwap"):
             features['vwap'] = calculate_vwap(candles_df)
 
         # Stochastic
-        if FEATURE_CONFIG.get('stoch_k', True) or FEATURE_CONFIG.get('stoch_d', True):
+        if FEATURE_CONFIG.get('stoch_k') or FEATURE_CONFIG.get('stoch_d'):
             if len(close) >= 14:
                 low14 = low[-14:]
                 high14 = high[-14:]
                 stoch_k = 100 * (close.values[-1] - low14.min()) / (high14.max() - low14.min() + 1e-8)
-                if FEATURE_CONFIG.get('stoch_k', True):
+                if FEATURE_CONFIG.get('stoch_k'):
                     features['stoch_k'] = stoch_k
-                if FEATURE_CONFIG.get('stoch_d', True):
+                if FEATURE_CONFIG.get('stoch_d'):
                     features['stoch_d'] = pd.Series([stoch_k]).rolling(3).mean().values[-1]
             else:
-                if FEATURE_CONFIG.get('stoch_k', True):
+                if FEATURE_CONFIG.get('stoch_k'):
                     features['stoch_k'] = 0.0
-                if FEATURE_CONFIG.get('stoch_d', True):
+                if FEATURE_CONFIG.get('stoch_d'):
                     features['stoch_d'] = 0.0
 
         # CCI
-        if FEATURE_CONFIG.get('cci', True):
+        if FEATURE_CONFIG.get('cci'):
             if len(close) >= 20:
                 tp = (high[-20:] + low[-20:] + close[-20:]) / 3
                 cci = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
@@ -383,7 +327,7 @@ def build_features(candles_df, news_df, symbol):
                 features['cci'] = 0.0
 
         # willr
-        if FEATURE_CONFIG.get('willr', True):
+        if FEATURE_CONFIG.get('willr'):
             if len(close) >= 14:
                 low14 = low[-14:]
                 high14 = high[-14:]
@@ -393,36 +337,36 @@ def build_features(candles_df, news_df, symbol):
                 features['willr'] = 0.0
 
         # ROC
-        if FEATURE_CONFIG.get('roc', True):
+        if FEATURE_CONFIG.get('roc'):
             if len(close) >= 11:
                 features['roc'] = close.pct_change(periods=10).values[-1]
             else:
                 features['roc'] = 0.0
 
         # PSAR (نمونه: فقط آخرین قیمت)
-        if FEATURE_CONFIG.get('psar', True):
+        if FEATURE_CONFIG.get('psar'):
             features['psar'] = close.values[-1]
 
         # candle_change
-        if FEATURE_CONFIG.get('candle_change', True):
+        if FEATURE_CONFIG.get('candle_change'):
             if len(close) >= 2:
                 features['candle_change'] = close.pct_change().values[-1]
             else:
                 features['candle_change'] = 0.0
 
         # candle_range
-        if FEATURE_CONFIG.get('candle_range', True):
+        if FEATURE_CONFIG.get('candle_range'):
             features['candle_range'] = (high.values[-1] - low.values[-1])
 
         # volume_mean
-        if FEATURE_CONFIG.get('volume_mean', True):
+        if FEATURE_CONFIG.get('volume_mean'):
             if len(volume) >= 20:
                 features['volume_mean'] = volume[-20:].mean()
             else:
                 features['volume_mean'] = volume.mean()
 
         # volume_spike
-        if FEATURE_CONFIG.get('volume_spike', True):
+        if FEATURE_CONFIG.get('volume_spike'):
             if len(volume) >= 20:
                 features['volume_spike'] = float(volume.values[-1] > np.mean(volume[-20:]) * 1.5)
             else:
@@ -430,14 +374,14 @@ def build_features(candles_df, news_df, symbol):
 
         # قیمت‌های کندل آخر
         for k in ['close','open','high','low','volume']:
-            if FEATURE_CONFIG.get(k, True):
+            if FEATURE_CONFIG.get(k):
                 features[k] = candles_df[k].values[-1]
 
         # ====== اندیکاتورهای مدرن و پرایس اکشن (با ta) ======
         if ta is not None:
             adx_window = 14
             adx_min = adx_window + 1
-            if FEATURE_CONFIG.get('adx14', True):
+            if FEATURE_CONFIG.get('adx14'):
                 if len(close) >= adx_min and len(high) >= adx_min and len(low) >= adx_min:
                     try:
                         adx_vals = ta.trend.ADXIndicator(
@@ -449,37 +393,37 @@ def build_features(candles_df, news_df, symbol):
                 else:
                     features['adx14'] = 0.0
 
-            if FEATURE_CONFIG.get('supertrend', True):
+            if FEATURE_CONFIG.get('supertrend'):
                 try:
                     features['supertrend'] = ta.trend.stc(close).values[-1]
                 except Exception:
                     features['supertrend'] = 0.0
 
-            if FEATURE_CONFIG.get('donchian_high', True):
+            if FEATURE_CONFIG.get('donchian_high'):
                 if len(high) >= 20:
                     features['donchian_high'] = high[-20:].max()
                 else:
                     features['donchian_high'] = 0.0
 
-            if FEATURE_CONFIG.get('donchian_low', True):
+            if FEATURE_CONFIG.get('donchian_low'):
                 if len(low) >= 20:
                     features['donchian_low'] = low[-20:].min()
                 else:
                     features['donchian_low'] = 0.0
 
-            if FEATURE_CONFIG.get('momentum5', True):
+            if FEATURE_CONFIG.get('momentum5'):
                 if len(close) >= 6:
                     features['momentum5'] = close.pct_change(5).values[-1]
                 else:
                     features['momentum5'] = 0.0
 
-            if FEATURE_CONFIG.get('momentum10', True):
+            if FEATURE_CONFIG.get('momentum10'):
                 if len(close) >= 11:
                     features['momentum10'] = close.pct_change(10).values[-1]
                 else:
                     features['momentum10'] = 0.0
 
-            if FEATURE_CONFIG.get('mean_reversion_zscore', True):
+            if FEATURE_CONFIG.get('mean_reversion_zscore'):
                 if len(close) >= 20:
                     mean = close[-20:].mean()
                     std = close[-20:].std()
@@ -487,37 +431,37 @@ def build_features(candles_df, news_df, symbol):
                 else:
                     features['mean_reversion_zscore'] = 0.0
 
-            if FEATURE_CONFIG.get('volatility', True):
+            if FEATURE_CONFIG.get('volatility'):
                 if len(close) >= 20:
                     features['volatility'] = close[-20:].std()
                 else:
                     features['volatility'] = 0.0
 
-            if FEATURE_CONFIG.get('price_gap', True):
+            if FEATURE_CONFIG.get('price_gap'):
                 if len(close) >= 2:
                     features['price_gap'] = close.values[-1] - close.values[-2]
                 else:
                     features['price_gap'] = 0.0
 
-            if FEATURE_CONFIG.get('shadow_ratio', True):
+            if FEATURE_CONFIG.get('shadow_ratio'):
                 if len(close) >= 1:
                     features['shadow_ratio'] = (high.values[-1] - low.values[-1]) / (abs(close.values[-1] - open_.values[-1]) + 1e-8)
                 else:
                     features['shadow_ratio'] = 0.0
 
-            if FEATURE_CONFIG.get('green_candles_10', True):
+            if FEATURE_CONFIG.get('green_candles_10'):
                 if len(close) >= 10:
                     features['green_candles_10'] = int((close[-10:] > open_[-10:]).sum())
                 else:
                     features['green_candles_10'] = 0
 
-            if FEATURE_CONFIG.get('red_candles_10', True):
+            if FEATURE_CONFIG.get('red_candles_10'):
                 if len(close) >= 10:
                     features['red_candles_10'] = int((close[-10:] < open_[-10:]).sum())
                 else:
                     features['red_candles_10'] = 0
 
-            if FEATURE_CONFIG.get('williams_vix_fix', True):
+            if FEATURE_CONFIG.get('williams_vix_fix'):
                 if len(high) >= 22 and len(close) >= 1:
                     features['williams_vix_fix'] = (high[-22:].max() - close.values[-1]) / (high[-22:].max() + 1e-8)
                 else:
@@ -526,7 +470,7 @@ def build_features(candles_df, news_df, symbol):
         # ===== فیچرهای خاص برای نقاط ورود/خروج =====
 
         # کراس EMA9/EMA21
-        if FEATURE_CONFIG.get('ema_cross_9_21', True):
+        if FEATURE_CONFIG.get('ema_cross_9_21'):
             if len(close) >= 22:
                 ema9 = close.ewm(span=9).mean().values
                 ema21 = close.ewm(span=21).mean().values
@@ -536,34 +480,34 @@ def build_features(candles_df, news_df, symbol):
                 features['ema_cross_9_21'] = 0.0
 
         # breakout/breakdown در 30 کندل اخیر
-        if FEATURE_CONFIG.get('breakout_30', True):
+        if FEATURE_CONFIG.get('breakout_30'):
             features['breakout_30'] = float(close.values[-1] > high[-30:].max() * 1.001) if len(close) >= 30 else 0.0
-        if FEATURE_CONFIG.get('breakdown_30', True):
+        if FEATURE_CONFIG.get('breakdown_30'):
             features['breakdown_30'] = float(close.values[-1] < low[-30:].min() * 0.999) if len(close) >= 30 else 0.0
 
         # درصد کندل‌های سبز/قرمز در 20 کندل آخر
-        if FEATURE_CONFIG.get('green_candle_ratio_20', True):
+        if FEATURE_CONFIG.get('green_candle_ratio_20'):
             greens = (close[-20:] > open_[-20:]).sum() if len(close)>=20 else 0
             features['green_candle_ratio_20'] = greens / 20 if len(close)>=20 else 0
-        if FEATURE_CONFIG.get('red_candle_ratio_20', True):
+        if FEATURE_CONFIG.get('red_candle_ratio_20'):
             reds = (close[-20:] < open_[-20:]).sum() if len(close)>=20 else 0
             features['red_candle_ratio_20'] = reds / 20 if len(close)>=20 else 0
 
         # اختلاف قیمت فعلی با EMA50 و EMA200
-        if FEATURE_CONFIG.get('price_ema50_diff', True):
+        if FEATURE_CONFIG.get('price_ema50_diff'):
             features['price_ema50_diff'] = close.values[-1] - safe_ema(close, 50)
-        if FEATURE_CONFIG.get('price_ema200_diff', True):
+        if FEATURE_CONFIG.get('price_ema200_diff'):
             features['price_ema200_diff'] = close.values[-1] - safe_ema(close, 200)
 
         # حجم spike حرفه‌ای
-        if FEATURE_CONFIG.get('vol_spike', True):
+        if FEATURE_CONFIG.get('vol_spike'):
             if len(volume) >= 20:
                 features['vol_spike'] = float(volume.values[-1] > volume[-20:].mean() * 1.5)
             else:
                 features['vol_spike'] = 0.0
 
         # ATR spike
-        if FEATURE_CONFIG.get('atr_spike', True):
+        if FEATURE_CONFIG.get('atr_spike'):
             if len(high) >= 15 and len(low) >= 15 and len(close) >= 15:
                 tr = pd.concat([
                     high[-15:] - low[-15:],
@@ -582,7 +526,7 @@ def build_features(candles_df, news_df, symbol):
                 features['atr_spike'] = 0.0
 
         # wick ratio
-        if FEATURE_CONFIG.get('wick_ratio', True):
+        if FEATURE_CONFIG.get('wick_ratio'):
             if len(close) >= 1:
                 body = abs(close.values[-1] - open_.values[-1])
                 high_wick = high.values[-1] - max(close.values[-1], open_.values[-1])
@@ -593,62 +537,23 @@ def build_features(candles_df, news_df, symbol):
 
         # ==== کندل پترن‌ها (talib) - با استفاده از safe_pattern_value ====
         if talib is not None:
-            if FEATURE_CONFIG.get('engulfing', True):
+            if FEATURE_CONFIG.get('engulfing'):
                 features['engulfing'] = safe_pattern_value(talib.CDLENGULFING(open_, high, low, close))
                 
-            if FEATURE_CONFIG.get('hammer', True):
+            if FEATURE_CONFIG.get('hammer'):
                 features['hammer'] = safe_pattern_value(talib.CDLHAMMER(open_, high, low, close))
                 
-            if FEATURE_CONFIG.get('doji', True):
+            if FEATURE_CONFIG.get('doji'):
                 features['doji'] = safe_pattern_value(talib.CDLDOJI(open_, high, low, close))
                 
-            if FEATURE_CONFIG.get('morning_star', True):
+            if FEATURE_CONFIG.get('morning_star'):
                 features['morning_star'] = safe_pattern_value(talib.CDLMORNINGSTAR(open_, high, low, close))
                 
-            if FEATURE_CONFIG.get('evening_star', True):
+            if FEATURE_CONFIG.get('evening_star'):
                 features['evening_star'] = safe_pattern_value(talib.CDLEVENINGSTAR(open_, high, low, close))
                 
-            if FEATURE_CONFIG.get('shooting_star', True):
+            if FEATURE_CONFIG.get('shooting_star'):
                 features['shooting_star'] = safe_pattern_value(talib.CDLSHOOTINGSTAR(open_, high, low, close))
-        else:
-            # اگر talib نیست، پیاده‌سازی ساده خودمان را انجام می‌دهیم
-            
-            # Doji: بدنه شمع کمتر از 10% کل طول شمع است
-            if FEATURE_CONFIG.get('doji', True):
-                if len(close) >= 1 and len(open_) >= 1 and len(high) >= 1 and len(low) >= 1:
-                    body = abs(close.values[-1] - open_.values[-1])
-                    range_size = high.values[-1] - low.values[-1]
-                    features['doji'] = 1 if (range_size > 0 and body / range_size < 0.1) else 0
-                else:
-                    features['doji'] = 0
-                    
-            # Engulfing: شمع فعلی بدنه شمع قبلی را کاملاً در بر می‌گیرد
-            if FEATURE_CONFIG.get('engulfing', True):
-                if len(close) >= 2 and len(open_) >= 2:
-                    bullish_engulfing = ((open_.values[-1] < open_.values[-2]) and 
-                                       (close.values[-1] > close.values[-2]) and
-                                       (close.values[-1] > open_.values[-2]) and
-                                       (open_.values[-1] < close.values[-2]))
-                    
-                    bearish_engulfing = ((open_.values[-1] > open_.values[-2]) and
-                                       (close.values[-1] < close.values[-2]) and
-                                       (close.values[-1] < open_.values[-2]) and
-                                       (open_.values[-1] > close.values[-2]))
-                                       
-                    features['engulfing'] = 100 if bullish_engulfing else (-100 if bearish_engulfing else 0)
-                else:
-                    features['engulfing'] = 0
-                    
-            # Hammer: بدنه کوچک در بالا، سایه بلند در پایین
-            if FEATURE_CONFIG.get('hammer', True):
-                if len(close) >= 1 and len(open_) >= 1 and len(high) >= 1 and len(low) >= 1:
-                    body = abs(close.values[-1] - open_.values[-1])
-                    upper_shadow = high.values[-1] - max(close.values[-1], open_.values[-1])
-                    lower_shadow = min(close.values[-1], open_.values[-1]) - low.values[-1]
-                    
-                    features['hammer'] = 1 if (lower_shadow > 2 * body and upper_shadow < 0.2 * body) else 0
-                else:
-                    features['hammer'] = 0
 
     # =========== فیچرهای خبری و فاندامنتال ===========
     try:
@@ -732,7 +637,7 @@ def build_features(candles_df, news_df, symbol):
             features.update(result)
         else:
             # اگر sentiment_score نداریم، فیچرهای خبری را با مقادیر پیش‌فرض پر می‌کنیم
-            logger.warning(f"No sentiment_score in news data for {symbol}")
+            print(f"Warning: No sentiment_score in news data for {symbol}")
             features['news_count'] = len(news_df)
             features['news_sentiment_mean'] = 0.0
             features['news_sentiment_std'] = 0.0
@@ -764,150 +669,6 @@ def build_features(candles_df, news_df, symbol):
             for v in ['sentiment_mean','sentiment_max','sentiment_min','pos_ratio','neg_ratio']:
                 features[f'news_{v}_{rng}'] = 0.0
 
-    # === فیچرهای پیشرفته اضافی (بیش از 50 فیچر جدید) ===
-    if candles_df is not None and len(close) > 30:
-        # 1. فیچرهای روند و مومنتوم
-        for period in [3, 7, 14, 30]:
-            if len(close) > period:
-                # شتاب قیمت
-                features[f'price_momentum_{period}'] = close.pct_change(period).values[-1]
-                
-                # نسبت قیمت به میانگین متحرک دوره
-                ma = close.rolling(period).mean()
-                features[f'price_to_ma_{period}'] = close.values[-1] / ma.values[-1] if ma.values[-1] > 0 else 1.0
-                
-                # انحراف معیار دوره
-                features[f'std_{period}'] = close.rolling(period).std().values[-1]
-                
-                # حداکثر و حداقل قیمت دوره
-                features[f'max_price_{period}'] = close[-period:].max() / close.values[-1] - 1
-                features[f'min_price_{period}'] = close[-period:].min() / close.values[-1] - 1
-                
-                # نسبت‌های حجم
-                features[f'vol_change_{period}'] = volume.pct_change(period).values[-1]
-                
-        # 2. فیچرهای نوسان پیشرفته
-        if len(close) > 20:
-            # شاخص چوب پرچم (Flag Pole Index)
-            recent_trend = close[-20:].pct_change(5).values
-            features['flag_pole_index'] = np.std(recent_trend)
-            
-            # Hurst Exponent (تقریب ساده)
-            series = np.array(close[-20:])
-            lags = range(2, 10)
-            tau = [np.sqrt(np.std(np.subtract(series[lag:], series[:-lag]))) for lag in lags]
-            hurst = np.polyfit(np.log(lags), np.log(tau), 1)[0]
-            features['hurst_exponent'] = hurst * 2  # نرمال کردن بین 0 و 2
-            
-            # شاخص قدرت مومنتوم نسبی (RSI و MACD ترکیبی)
-            rsi = safe_rsi(close, 14)
-            macd_val, _, _ = safe_macd(close)
-            features['rsi_macd_strength'] = (rsi/100) * np.sign(macd_val)
-            
-        # 3. فیچرهای الگوهای قیمت
-        if len(close) > 30 and len(open_) > 30:
-            # الگوی W (دابل باتم)
-            lows = low[-30:].values
-            if len(lows) >= 30:
-                lower_band = np.percentile(lows, 25)  # باند پایینی 25٪
-                bottoms = []
-                for i in range(1, len(lows)-1):
-                    if lows[i] < lower_band and lows[i] <= lows[i-1] and lows[i] <= lows[i+1]:
-                        bottoms.append(i)
-                
-                # بررسی آیا دو کف با فاصله مناسب وجود دارد
-                double_bottom = 0
-                if len(bottoms) >= 2:
-                    for i in range(len(bottoms)-1):
-                        distance = bottoms[i+1] - bottoms[i]
-                        if 5 <= distance <= 15:  # فاصله معقول بین دو کف
-                            double_bottom = 1
-                            break
-                
-                features['double_bottom'] = double_bottom
-                
-                # الگوی M (دابل تاپ)
-                highs = high[-30:].values
-                upper_band = np.percentile(highs, 75)  # باند بالایی 75٪
-                tops = []
-                for i in range(1, len(highs)-1):
-                    if highs[i] > upper_band and highs[i] >= highs[i-1] and highs[i] >= highs[i+1]:
-                        tops.append(i)
-                
-                double_top = 0
-                if len(tops) >= 2:
-                    for i in range(len(tops)-1):
-                        distance = tops[i+1] - tops[i]
-                        if 5 <= distance <= 15:  # فاصله معقول بین دو قله
-                            double_top = 1
-                            break
-                
-                features['double_top'] = double_top
-        
-        # 4. فیچرهای تشخیص فشار خرید/فروش
-        if len(close) > 20 and len(volume) > 20:
-            # فشار خرید (بالا رفتن قیمت با افزایش حجم)
-            green_candles = close[-20:] > open_[-20:]
-            green_volumes = volume[-20:][green_candles]
-            red_volumes = volume[-20:][~green_candles]
-            
-            features['buying_pressure'] = green_volumes.mean() / volume[-20:].mean() if len(green_volumes) > 0 else 0
-            features['selling_pressure'] = red_volumes.mean() / volume[-20:].mean() if len(red_volumes) > 0 else 0
-            
-            # شاخص تجمعی قدرت (خرید - فروش)
-            features['strength_index'] = features['buying_pressure'] - features['selling_pressure']
-        
-        # 5. فیچرهای محاسبات آماری پیشرفته
-        if len(close) > 50:
-            # کورتوسیس (تیزی توزیع)
-            returns = close.pct_change().dropna()
-            if len(returns) > 10:
-                features['kurtosis'] = pd.Series(returns[-50:]).kurtosis()
-                
-                # چولگی (Skewness) - تقارن توزیع
-                features['skewness'] = pd.Series(returns[-50:]).skew()
-                
-                # Maximum Drawdown (حداکثر افت)
-                price_series = close[-50:].values
-                peak = price_series[0]
-                max_drawdown = 0
-                
-                for price in price_series:
-                    if price > peak:
-                        peak = price
-                    drawdown = (peak - price) / peak
-                    max_drawdown = max(max_drawdown, drawdown)
-                
-                features['max_drawdown'] = max_drawdown
-        
-        # 6. فیچرهای ترکیبی متا
-        # ترکیب اندیکاتورها برای تشخیص روند
-        if 'rsi14' in features and 'macd' in features and 'ema20' in features and 'ema50' in features:
-            trend_signals = []
-            
-            # RSI سیگنال
-            if features['rsi14'] > 60:
-                trend_signals.append(1)  # صعودی
-            elif features['rsi14'] < 40:
-                trend_signals.append(-1)  # نزولی
-            else:
-                trend_signals.append(0)  # خنثی
-                
-            # MACD سیگنال
-            if features['macd'] > 0:
-                trend_signals.append(1)
-            else:
-                trend_signals.append(-1)
-                
-            # EMA سیگنال
-            if features['ema20'] > features['ema50']:
-                trend_signals.append(1)
-            else:
-                trend_signals.append(-1)
-                
-            # محاسبه میانگین سیگنال‌ها
-            features['trend_meta_signal'] = sum(trend_signals) / len(trend_signals)
-
     # چاپ اطلاعات دیباگ
     if debug_info:
         print(f"=== Feature calculation debug for {symbol} ===")
@@ -922,21 +683,6 @@ def build_features(candles_df, news_df, symbol):
     # گزارش تعداد فیچرهای غیر صفر برای اطلاعات
     non_zero_count = (features_df != 0).sum().sum()
     total_features = len(features_df.columns)
-    logger.info(f"Generated {non_zero_count}/{total_features} non-zero features for {symbol}")
     print(f"Generated {non_zero_count}/{total_features} non-zero features for {symbol}")
     
     return features_df
-
-def calculate_news_features(news_df, candles_df):
-    """
-    محاسبه فیچرهای مبتنی بر اخبار و سنتیمنت
-    """
-    if news_df is None or news_df.empty:
-        return pd.DataFrame()
-    
-    # تبدیل به دیتافریم
-    result = pd.DataFrame()
-    
-    # ... کد محاسبه فیچرهای خبری ...
-    
-    return result
