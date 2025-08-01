@@ -35,7 +35,7 @@ warnings.filterwarnings('ignore')
 
 # پیکربندی تنظیمات
 from utils.config import DB_CONFIG
-from config.trading_config import TRADING_CONFIG
+from utils.config import TRADING_CONFIG
 
 # بارگذاری فایل‌های مدل
 from specialist_models.moving_averages_model import MovingAveragesModel
