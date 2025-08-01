@@ -324,6 +324,7 @@ def main():
         from specialist_models.volatility_model import VolatilityModel
         from specialist_models.candlestick_model import CandlestickModel
         from specialist_models.news_model import NewsModel
+        from specialist_models.advanced_patterns_model import AdvancedPatternsModel
         from meta_model.model_combiner import ModelCombiner
         from feature_selection.feature_groups import FEATURE_GROUPS
         
@@ -342,7 +343,8 @@ def main():
             'oscillators': OscillatorsModel(),
             'volatility': VolatilityModel(),
             'candlestick': CandlestickModel(),
-            'news': NewsModel()
+            'news': NewsModel(),
+            'advanced_patterns': AdvancedPatternsModel()  # افزودن مدل جدید
         }
         
         for name, model in specialist_models.items():
