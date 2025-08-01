@@ -40,3 +40,40 @@ def get_news_for_range(symbol, start_ts, end_ts):
         return df
     finally:
         conn.close()
+
+# اضافه کردن این تابع به فایل موجود
+def get_historical_news(symbol, limit=1000):
+    """
+    دریافت اخبار تاریخی از دیتابیس
+    
+    Args:
+        symbol: نماد مورد نظر
+        limit: تعداد خبر
+        
+    Returns:
+        DataFrame حاوی اخبار
+    """
+    import mysql.connector
+    import pandas as pd
+    
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='database'
+    )
+    
+    # استخراج سیمبل پایه (مثلاً BTC از BTCUSDT)
+    base_symbol = symbol.replace('USDT', '')
+    
+    query = """
+    SELECT * FROM news 
+    WHERE symbol IN (%s, 'BITCOIN', 'BTC', 'ETHEREUM', 'ETH')
+    ORDER BY published_at DESC 
+    LIMIT %s
+    """
+    
+    df = pd.read_sql(query, conn, params=[base_symbol, limit])
+    conn.close()
+    
+    return df        
