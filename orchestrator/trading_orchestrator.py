@@ -6,9 +6,10 @@ import time
 import threading
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import os
+import json
 from feature_store.feature_database import FeatureDatabase
 from meta_model.model_combiner import ModelCombiner
 from specialist_models.moving_averages_model import MovingAveragesModel
@@ -16,7 +17,11 @@ from specialist_models.oscillators_model import OscillatorsModel
 from specialist_models.volatility_model import VolatilityModel
 from specialist_models.candlestick_model import CandlestickModel
 from specialist_models.news_model import NewsModel
+from specialist_models.advanced_patterns_model import AdvancedPatternsModel
 from meta_model.adaptive_thresholds import AdaptiveThresholds
+from trading.demo_account import DemoAccount
+from trading.position_manager import PositionManager
+from trading.risk_manager import RiskManager
 
 # تنظیم لاگر
 logger = logging.getLogger("trading_orchestrator")
@@ -51,6 +56,28 @@ class TradingOrchestrator:
         self.last_signal_time = {}  # زمان آخرین سیگنال برای هر نماد
         self.signal_cooldown = 300  # مدت زمان انتظار بین سیگنال‌ها (به ثانیه)
         
+        # مدیریت حساب دمو
+        self.demo_account = DemoAccount(10000.0)  # 10,000 USDT موجودی اولیه
+        
+        # مدیریت موقعیت‌های معاملاتی
+        self.position_manager = PositionManager()
+        
+        # مدیریت ریسک
+        self.risk_manager = RiskManager()
+        
+        # تنظیمات TP/SL
+        self.tp_levels = [1.01, 1.02, 1.03, 1.05]  # TP1, TP2, TP3, TP4 (درصد)
+        self.tp_volumes = [0.25, 0.25, 0.25, 0.25]  # حجم هر TP (درصد)
+        self.sl_initial = 0.99  # SL اولیه (درصد)
+        self.trailing_activation = 1.01  # فعال‌سازی تریلینگ استاپ (درصد)
+        self.trailing_distance = 0.005  # فاصله تریلینگ استاپ (درصد)
+        
+    def set_demo_balance(self, balance):
+        """تنظیم موجودی حساب دمو"""
+        self.demo_account = DemoAccount(balance)
+        logger.info(f"Demo account balance set to {balance} USDT")
+        print(f"{Colors.CYAN}Demo account balance set to {balance} USDT{Colors.RESET}")
+        
     def initialize(self):
         """بارگیری مدل‌های ذخیره شده"""
         logger.info(f"Initializing trading orchestrator for {self.symbols}")
@@ -62,7 +89,8 @@ class TradingOrchestrator:
             'oscillators': OscillatorsModel().load(),
             'volatility': VolatilityModel().load(),
             'candlestick': CandlestickModel().load(),
-            'news': NewsModel().load()
+            'news': NewsModel().load(),
+            'advanced_patterns': AdvancedPatternsModel().load()
         }
         
         # بارگیری مدل متا
@@ -91,6 +119,16 @@ class TradingOrchestrator:
         # برای هر نماد، تنظیم زمان آخرین سیگنال
         for symbol in self.symbols:
             self.last_signal_time[symbol] = datetime.now().timestamp() - self.signal_cooldown
+            
+            # بررسی قیمت اولیه
+            try:
+                candles = self.db.get_latest_features(symbol)
+                if candles is not None and 'close' in candles.columns:
+                    price = candles['close'].iloc[0]
+                    self.position_manager.update_market_price(symbol, price)
+                    logger.info(f"Initial price for {symbol}: {price}")
+            except Exception as e:
+                logger.error(f"Error getting initial price for {symbol}: {e}")
         
         return self
         
@@ -107,6 +145,10 @@ class TradingOrchestrator:
         self.thread.start()
         logger.info("Trading orchestrator started")
         print(f"{Colors.GREEN}Trading system started. Press Ctrl+C to stop.{Colors.RESET}")
+        
+        # نمایش وضعیت حساب دمو
+        self.demo_account.print_status()
+        
         return self
         
     def stop(self):
@@ -116,12 +158,55 @@ class TradingOrchestrator:
             self.thread.join(timeout=5)
         logger.info("Trading orchestrator stopped")
         print(f"{Colors.YELLOW}Trading system stopped{Colors.RESET}")
+        
+        # بستن تمام موقعیت‌های باز
+        self.close_all_positions()
+        
+        # نمایش وضعیت نهایی حساب دمو
+        self.demo_account.print_status()
+        
         return self
+    
+    def close_all_positions(self):
+        """بستن تمام موقعیت‌های باز"""
+        positions = self.position_manager.get_all_positions()
+        if not positions:
+            print(f"{Colors.YELLOW}No open positions to close{Colors.RESET}")
+            return
+            
+        print(f"{Colors.YELLOW}Closing all open positions...{Colors.RESET}")
+        
+        for symbol, position in positions.items():
+            try:
+                # دریافت قیمت فعلی
+                candles = self.db.get_latest_features(symbol)
+                if candles is not None and 'close' in candles.columns:
+                    price = candles['close'].iloc[0]
+                    
+                    if position['type'] == 'buy':
+                        profit_loss = (price - position['entry_price']) * position['size']
+                    else:
+                        profit_loss = (position['entry_price'] - price) * position['size']
+                    
+                    # بستن موقعیت
+                    self.position_manager.close_position(symbol)
+                    
+                    # به‌روزرسانی حساب دمو
+                    self.demo_account.update_balance(profit_loss)
+                    
+                    logger.info(f"Closed position for {symbol} at {price}, P&L: {profit_loss:.2f} USDT")
+                    print(f"{Colors.CYAN}Closed position for {symbol} at {price}, P&L: {profit_loss:.2f} USDT{Colors.RESET}")
+            except Exception as e:
+                logger.error(f"Error closing position for {symbol}: {e}")
         
     def _run_trading_loop(self):
         """حلقه اصلی معاملات"""
         while self.running:
             try:
+                # به‌روزرسانی و بررسی موقعیت‌های فعلی
+                self._check_active_positions()
+                
+                # بررسی سیگنال‌های جدید
                 for symbol in self.symbols:
                     self._process_symbol(symbol)
                     
@@ -132,12 +217,134 @@ class TradingOrchestrator:
                 logger.error(f"Error in trading loop: {e}", exc_info=True)
                 print(f"{Colors.RED}Error in trading loop: {e}{Colors.RESET}")
                 time.sleep(5)  # انتظار کوتاه در صورت خطا
+    
+    def _check_active_positions(self):
+        """بررسی و به‌روزرسانی موقعیت‌های فعال"""
+        positions = self.position_manager.get_all_positions()
+        
+        for symbol, position in positions.items():
+            try:
+                # دریافت آخرین قیمت
+                candles = self.db.get_latest_features(symbol)
+                if candles is None or 'close' not in candles.columns:
+                    continue
+                    
+                price = candles['close'].iloc[0]
+                self.position_manager.update_market_price(symbol, price)
+                
+                # محاسبه سود/زیان فعلی
+                if position['type'] == 'buy':
+                    current_profit = (price / position['entry_price'] - 1) * 100
+                else:
+                    current_profit = (position['entry_price'] / price - 1) * 100
+                    
+                # بررسی تریلینگ استاپ
+                if position['trailing_stop_active']:
+                    # بررسی آیا قیمت از SL تریلینگ عبور کرده است
+                    if (position['type'] == 'buy' and price <= position['stop_loss']) or \
+                       (position['type'] == 'sell' and price >= position['stop_loss']):
+                        
+                        # بستن موقعیت با SL
+                        self._close_position_with_sl(symbol, position, price)
+                        
+                elif current_profit >= self.trailing_activation * 100:
+                    # فعال‌سازی تریلینگ استاپ
+                    if position['type'] == 'buy':
+                        new_sl = price * (1 - self.trailing_distance)
+                        if new_sl > position['stop_loss']:
+                            self.position_manager.update_stop_loss(symbol, new_sl, True)
+                            logger.info(f"Trailing stop activated for {symbol} at {new_sl:.2f}")
+                    else:
+                        new_sl = price * (1 + self.trailing_distance)
+                        if new_sl < position['stop_loss']:
+                            self.position_manager.update_stop_loss(symbol, new_sl, True)
+                            logger.info(f"Trailing stop activated for {symbol} at {new_sl:.2f}")
+                
+                # بررسی سطوح TP
+                tp_levels = position['tp_levels']
+                tp_volumes = position['tp_volumes']
+                
+                for i, (tp, volume) in enumerate(zip(tp_levels, tp_volumes)):
+                    if volume <= 0:  # این سطح قبلاً اجرا شده است
+                        continue
+                        
+                    if position['type'] == 'buy' and price >= tp:
+                        # اجرای TP جزئی
+                        self._execute_partial_tp(symbol, position, price, i)
+                    elif position['type'] == 'sell' and price <= tp:
+                        # اجرای TP جزئی
+                        self._execute_partial_tp(symbol, position, price, i)
+                
+                # بررسی SL
+                if not position['trailing_stop_active']:
+                    if (position['type'] == 'buy' and price <= position['stop_loss']) or \
+                       (position['type'] == 'sell' and price >= position['stop_loss']):
+                        
+                        # بستن موقعیت با SL
+                        self._close_position_with_sl(symbol, position, price)
+                        
+            except Exception as e:
+                logger.error(f"Error processing active position for {symbol}: {e}")
+                
+    def _execute_partial_tp(self, symbol, position, price, tp_index):
+        """اجرای TP جزئی"""
+        tp_size = position['size'] * position['tp_volumes'][tp_index]
+        
+        if position['type'] == 'buy':
+            profit = (price - position['entry_price']) * tp_size
+        else:
+            profit = (position['entry_price'] - price) * tp_size
+            
+        # محاسبه کارمزد
+        commission = self._calculate_commission(price, tp_size)
+        net_profit = profit - commission
+        
+        # به‌روزرسانی حساب دمو
+        self.demo_account.update_balance(net_profit)
+        
+        # به‌روزرسانی موقعیت
+        self.position_manager.execute_partial_tp(symbol, tp_index, tp_size, price)
+        
+        # حرکت SL به نقطه ورود یا بالاتر پس از اجرای TP1
+        if tp_index == 0:  # TP1
+            if position['type'] == 'buy':
+                new_sl = position['entry_price']  # حداقل در نقطه سر به سر
+            else:
+                new_sl = position['entry_price']
+            self.position_manager.update_stop_loss(symbol, new_sl)
+            
+        logger.info(f"Executed TP{tp_index+1} for {symbol} at {price:.2f}, size: {tp_size:.6f}, profit: {net_profit:.2f} USDT")
+        print(f"{Colors.GREEN}TP{tp_index+1} hit for {symbol} at {price:.2f}, profit: {net_profit:.2f} USDT (fee: {commission:.2f}){Colors.RESET}")
+                
+    def _close_position_with_sl(self, symbol, position, price):
+        """بستن موقعیت با استاپ لاس"""
+        if position['type'] == 'buy':
+            profit_loss = (price - position['entry_price']) * position['size']
+        else:
+            profit_loss = (position['entry_price'] - price) * position['size']
+            
+        # محاسبه کارمزد
+        commission = self._calculate_commission(price, position['size'])
+        net_profit_loss = profit_loss - commission
+        
+        # به‌روزرسانی حساب دمو
+        self.demo_account.update_balance(net_profit_loss)
+        
+        # بستن موقعیت
+        self.position_manager.close_position(symbol)
+        
+        logger.info(f"Stop loss triggered for {symbol} at {price:.2f}, P&L: {net_profit_loss:.2f} USDT")
+        print(f"{Colors.RED}Stop loss hit for {symbol} at {price:.2f}, P&L: {net_profit_loss:.2f} USDT (fee: {commission:.2f}){Colors.RESET}")
                 
     def _process_symbol(self, symbol):
         """پردازش یک نماد"""
         # بررسی زمان آخرین سیگنال (برای جلوگیری از سیگنال‌های مکرر)
         current_time = datetime.now().timestamp()
         if current_time - self.last_signal_time[symbol] < self.signal_cooldown:
+            return
+            
+        # بررسی آیا قبلاً موقعیتی برای این نماد باز شده است
+        if self.position_manager.has_position(symbol):
             return
             
         # دریافت آخرین فیچرها
@@ -239,49 +446,9 @@ class TradingOrchestrator:
                     confidence = probas[pred] * 100
                     print(f"  {name}: {decision_color}{decision_name}{Colors.RESET} ({confidence:.1f}%)")
                 
-                print("="*50 + "\n")
+                # قیمت فعلی
+                current_price = features['close'].iloc[0]
+                print(f"\nCurrent price: {current_price:.2f}")
                 
-                # ثبت در دیتابیس
-                self._record_trade_signal(symbol, adjusted_decision, confidence, meta_proba[0])
-                
-            except Exception as e:
-                logger.error(f"Error in meta model prediction: {e}", exc_info=True)
-                
-    def _calculate_market_volatility(self, symbol, features):
-        """محاسبه نوسان بازار"""
-        try:
-            # استفاده از پهنای باند بولینگر یا ATR به عنوان معیار نوسان
-            if 'bb_width' in features.columns:
-                return features['bb_width'].iloc[0] / 1000  # نرمال‌سازی
-            elif 'atr14' in features.columns:
-                return features['atr14'].iloc[0] / 100  # نرمال‌سازی
-            return 0.05  # مقدار پیش‌فرض
-        except:
-            return 0.05  # مقدار پیش‌فرض
-    
-    def _calculate_market_trend(self, symbol, features):
-        """محاسبه روند بازار"""
-        try:
-            # استفاده از MACD یا میانگین‌های متحرک برای تشخیص روند
-            if 'macd' in features.columns:
-                return features['macd'].iloc[0]
-            elif 'ema20' in features.columns and 'ema50' in features.columns:
-                return (features['ema20'].iloc[0] / features['ema50'].iloc[0]) - 1
-            return 0  # خنثی
-        except:
-            return 0  # خنثی
-                
-    def _record_trade_signal(self, symbol, decision, confidence, probabilities):
-        """ثبت سیگنال معاملاتی در دیتابیس"""
-        try:
-            self.db.insert_trade_signal(
-                symbol=symbol,
-                timestamp=datetime.now(),
-                decision=decision,
-                confidence=confidence,
-                sell_prob=probabilities[0],
-                hold_prob=probabilities[1],
-                buy_prob=probabilities[2]
-            )
-        except Exception as e:
-            logger.error(f"Error recording trade signal: {e}", exc_info=True)
+                # مدیریت اجرای سیگنال
+                if adjusted_decision != 1 and confidence > 
