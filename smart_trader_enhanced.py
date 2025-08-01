@@ -4,6 +4,7 @@
 import argparse
 import time
 import os
+import sys
 import json
 from datetime import datetime
 import pandas as pd
@@ -74,8 +75,11 @@ def main():
         orchestrator = start_trading_system(args.symbols)
         services.append(orchestrator)
     
+    # جایگزین کردن بخش args.train در فایل smart_trader_enhanced.py
     if args.train:
         print("Starting model training...")
+        import pandas as pd
+        import numpy as np
         from specialist_models.moving_averages_model import MovingAveragesModel
         from specialist_models.oscillators_model import OscillatorsModel
         from specialist_models.volatility_model import VolatilityModel
@@ -83,18 +87,25 @@ def main():
         from specialist_models.news_model import NewsModel
         from meta_model.model_combiner import ModelCombiner
         from feature_selection.feature_groups import FEATURE_GROUPS
-        from data.candle_manager import get_historical_candles
-        from data.news_manager import get_historical_news
+        from data.candle_manager import get_latest_candles
+        from data.news_manager import get_latest_news
         from feature_engineering.feature_engineer import build_features
         
         print("Loading historical data...")
-        # دریافت داده‌های تاریخی برای آموزش
-        candles = get_historical_candles(args.symbol, 10000)
-        news = get_historical_news(args.symbol, 1000)
+        # استفاده از توابع موجود به جای توابع جدید
+        symbol = args.symbol
+        candles = get_latest_candles(symbol, 10000)  # استفاده از تابع موجود
+        news = get_latest_news(symbol, 1000)  # استفاده از تابع موجود
         
+        if candles.empty:
+            print(f"Error: No candle data available for {symbol}")
+            sys.exit(1)
+        
+        print(f"Data loaded: {len(candles)} candles and {len(news)} news items")
         print("Building features...")
+        
         # ساخت فیچرها
-        features = build_features(candles, news, args.symbol)
+        features = build_features(candles, news, symbol)
         
         print("Creating target variable...")
         # ساخت متغیر هدف
@@ -108,8 +119,10 @@ def main():
         
         # حذف ردیف‌های بدون مقدار هدف
         features = features.dropna(subset=['target']).copy()
+        features['target'] = features['target'].astype(int)
         
         print(f"Training data prepared with {len(features)} samples")
+        print(f"Target distribution: {features['target'].value_counts().to_dict()}")
         
         # آموزش مدل‌های متخصص
         specialist_models = {
@@ -126,12 +139,53 @@ def main():
             available_features = [f for f in group_features if f in features.columns]
             
             if available_features:
+                print(f"Using {len(available_features)} features for {name} model")
                 X = features[available_features]
                 y = features['target']
                 model.train(X, y)
                 model.save()
+            else:
+                print(f"Warning: No features available for {name} model")
+        
+        print("Training meta model...")
+        # ساخت مدل متا با استفاده از مدل‌های متخصص
+        combiner = ModelCombiner(list(specialist_models.values()))
+        
+        # ایجاد داده‌های ورودی برای مدل متا
+        meta_features = pd.DataFrame()
+        
+        # پیش‌بینی با هر مدل متخصص
+        for name, model in specialist_models.items():
+            if model.model is None:
+                print(f"Warning: {name} model not trained, skipping")
+                continue
+                
+            # انتخاب فیچرهای مربوط به گروه این مدل
+            required_features = model.get_required_features()
+            available_features = [f for f in required_features if f in features.columns]
             
-        print("Specialist models trained successfully")
+            if available_features:
+                try:
+                    # پیش‌بینی احتمالات کلاس‌ها
+                    X = features[available_features]
+                    _, probas = model.predict(X)
+                    
+                    # افزودن احتمالات به فیچرهای مدل متا
+                    for j in range(probas.shape[1]):
+                        meta_features[f"{name}_class{j}"] = probas[:, j]
+                    
+                    print(f"Added predictions from {name} model to meta features")
+                    
+                except Exception as e:
+                    print(f"Error in {name} prediction for meta-model training: {e}")
+        
+        if not meta_features.empty:
+            # آموزش مدل متا
+            combiner.train(meta_features, features['target'])
+            combiner.save()
+            print("Meta model trained and saved successfully")
+        else:
+            print("Warning: No meta-features available for meta-model training")
     
     if not (args.feature_calc or args.monitor or args.trading or args.train):
         # اجرای همه سرویس‌ها با تنظیمات پیش‌فرض
